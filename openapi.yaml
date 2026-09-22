@@ -1,0 +1,1847 @@
+openapi: 3.0.3
+info:
+  title: COBACH35 - Sistema de Seguimiento de Asistencias
+  description: |
+    Especificación de endpoints del backend (frente "Interfaz" del cronograma)
+    para el Sistema Web y Móvil de Seguimiento de Asistencias del COBACH 35.
+
+    Contrato común: lo implementa el backend en Laravel 11+ y lo consumen la
+    app móvil del docente (Flutter) y el sistema web de orientador/administrador
+    (Vue.js 3). Autenticación con Laravel Sanctum (Bearer token); las rutas se
+    protegen por permiso, no solo por rol. Cada operación declara su permiso en
+    la extensión `x-permission` (ver matriz rol → permisos en la sección 7.2 de
+    COBACH35_Checkpoint_Avance.md).
+
+    MOCK: este archivo se sirve tal cual como mock server con Prism
+      npx @stoplight/prism-cli mock openapi.yaml --port 4010
+    y cada caso concreto se pide con encabezados:
+      Prefer: example=<nombre>   (ej. example=con_conflicto)
+      Prefer: code=<status>      (ej. code=401)
+
+    CAMBIOS EN v1.3.0 respecto de v1.2.0:
+      1. `x-permission` en cada operación, con los 15 slugs de permiso que
+         siembra PermisoSeeder. `autenticado` = basta token; `publico` = sin token.
+      2. Respuestas de error comunes en components/responses (401, 403, 404,
+         409, 422) con la misma forma que devuelve Laravel, referenciadas desde
+         cada operación.
+      3. Ejemplos nombrados para el mock (login, me, mis-horarios, alumnos del
+         grupo, lote, sincronizar, sesiones-clase, semáforo, importaciones).
+      4. Usuario.rol pasa de enum cerrado a string: el RBAC es extensible
+         (punto abierto 4) y un enum rompería el contrato al agregar un rol.
+         /login y /me devuelven ahora UsuarioSesion, que incluye la lista de
+         permisos: web y móvil deben decidir qué mostrar por permiso, no por
+         nombre de rol.
+      5. canal_preferido / canal ya no aceptan 'push': no hay push a padres en
+         esta fase (decisión 2026-09-18). La columna de BD conserva 'push' para
+         la fase 2, pero la API lo rechaza.
+      6. Se actualizó la nota de dispositivos_padres (sección SISTEMA) con la
+         decisión ya tomada.
+      7. POST /asistencias ahora pide sesion_clase_id en el body. En v1.2.0 no
+         lo pedía, así que el servidor no tenía forma de saber a qué sesión
+         pertenecía el registro.
+
+    CAMBIOS EN v1.2.0 respecto de v1.1.0 (resumen):
+      corrección offline-first de /asistencias/sincronizar (horario_id + fecha
+      en vez de sesion_clase_id); AsistenciaInput separado en online/offline;
+      resultados por registro en lote y sincronizar; gestión de roles/permisos,
+      padres/tutores y GET /alumnos agregados.
+  version: 1.3.0
+
+servers:
+  - url: http://127.0.0.1:8000/api
+    description: Entorno local (backend Laravel)
+  - url: http://127.0.0.1:4010
+    description: Mock server (Prism) generado desde este archivo
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Autenticación
+  - name: Docente
+  - name: Orientador
+  - name: Administrador
+  - name: Sistema
+
+paths:
+
+  # AUTENTICACIÓN
+  /login:
+    post:
+      tags: [Autenticación]
+      summary: Iniciar sesión y obtener token (CU-01)
+      x-permission: publico
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, example: docente1 }
+                password: { type: string, format: password, example: password }
+      responses:
+        '200':
+          description: Login exitoso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  usuario: { $ref: '#/components/schemas/UsuarioSesion' }
+              examples:
+                docente:
+                  value:
+                    token: "1|mockTokenDocente1xxxxxxxxxxxxxxxxxxxxxxxxxx"
+                    usuario:
+                      id: 4
+                      nombre: "Juan Carlos Méndez Ruiz"
+                      username: docente1
+                      correo: "docente1@cobach35.test"
+                      rol: docente
+                      activo: true
+                      es_super_admin: false
+                      permisos: [registrar_asistencia, consultar_asistencias, consultar_calificaciones]
+        '401':
+          description: Credenciales inválidas o usuario inactivo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                message: "Usuario o contraseña incorrectos."
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /logout:
+    post:
+      tags: [Autenticación]
+      summary: Cerrar sesión (revocar token actual)
+      x-permission: autenticado
+      responses:
+        '204':
+          description: Sesión cerrada
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /me:
+    get:
+      tags: [Autenticación]
+      summary: Obtener datos, rol y permisos del usuario autenticado
+      x-permission: autenticado
+      responses:
+        '200':
+          description: Datos del usuario
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsuarioSesion' }
+              examples:
+                docente: { $ref: '#/components/examples/SesionDocente' }
+                orientador: { $ref: '#/components/examples/SesionOrientador' }
+                administrador: { $ref: '#/components/examples/SesionAdministrador' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  # DOCENTE
+  /mis-horarios:
+    get:
+      tags: [Docente]
+      summary: Consultar horarios (grupo + materia) asignados al docente autenticado (CU-02)
+      x-permission: registrar_asistencia
+      responses:
+        '200':
+          description: Lista de horarios asignados
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Horario' }
+              examples:
+                cuatro_horarios:
+                  value:
+                    - id: 1
+                      grupo: { id: 1, grado: "1", letra: "A", turno: matutino, plantel_id: 1, periodo_id: 1 }
+                      materia: { id: 1, clave: "A0021", nombre: "Matemáticas I" }
+                      dia_semana: 1
+                      hora_inicio: "07:00"
+                      hora_fin: "07:50"
+                    - id: 2
+                      grupo: { id: 2, grado: "1", letra: "B", turno: matutino, plantel_id: 1, periodo_id: 1 }
+                      materia: { id: 1, clave: "A0021", nombre: "Matemáticas I" }
+                      dia_semana: 1
+                      hora_inicio: "07:50"
+                      hora_fin: "08:40"
+                    - id: 3
+                      grupo: { id: 1, grado: "1", letra: "A", turno: matutino, plantel_id: 1, periodo_id: 1 }
+                      materia: { id: 2, clave: "A0022", nombre: "Química I" }
+                      dia_semana: 3
+                      hora_inicio: "09:00"
+                      hora_fin: "09:50"
+                    - id: 4
+                      grupo: { id: 2, grado: "1", letra: "B", turno: matutino, plantel_id: 1, periodo_id: 1 }
+                      materia: { id: 5, clave: "OE", nombre: "Orientación Educativa" }
+                      dia_semana: 5
+                      hora_inicio: "11:00"
+                      hora_fin: "11:50"
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /grupos/{grupo_id}/alumnos:
+    get:
+      tags: [Docente]
+      summary: Listar alumnos con inscripción vigente en un grupo
+      description: >
+        Pertenencia (s5a-s7a): un docente solo puede consultar grupos en los
+        que tiene al menos un horario asignado; si no, 403.
+      x-permission: registrar_asistencia
+      parameters:
+        - $ref: '#/components/parameters/GrupoId'
+      responses:
+        '200':
+          description: Lista de alumnos inscritos en el grupo en el periodo activo
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Alumno' }
+              examples:
+                cinco_alumnos:
+                  value:
+                    - { id: 1, matricula: "26071035000001", nombre: "Ana Sofía Gómez Pérez", activo: true, situacion_academica: regular }
+                    - { id: 2, matricula: "26071035000002", nombre: "Carlos Eduardo Ruiz López", activo: true, situacion_academica: regular }
+                    - { id: 3, matricula: "26071035000003", nombre: "Diana Laura Hernández Cruz", activo: true, situacion_academica: irregular }
+                    - { id: 4, matricula: "26071035000004", nombre: "Emilio Vázquez Morales", activo: true, situacion_academica: recursador }
+                    - { id: 5, matricula: "26071035000005", nombre: "Fernanda Álvarez Díaz", activo: true, situacion_academica: extemporaneo }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /sesiones-clase:
+    post:
+      tags: [Docente]
+      summary: Abrir una sesión de clase activa (necesaria antes de pasar lista online) (CU-03)
+      x-permission: registrar_asistencia
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [horario_id, fecha]
+              properties:
+                horario_id: { type: integer, example: 1 }
+                fecha: { type: string, format: date, example: "2026-09-22" }
+      responses:
+        '201':
+          description: Sesión creada (o existente, si ya se había abierto para ese horario+fecha)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SesionClase' }
+              example: { id: 789, horario_id: 1, fecha: "2026-09-22", cancelada: false }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '409':
+          description: La sesión de ese horario y fecha está cancelada; no se puede pasar lista
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                message: "La sesión de clase está cancelada: Suspensión por junta de academia."
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /asistencias:
+    post:
+      tags: [Docente]
+      summary: Registrar la asistencia de un alumno en una sesión ya abierta (CU-03, modo online)
+      description: >
+        Requiere haber abierto la sesión primero con POST /sesiones-clase.
+        Solo para el flujo online — el flujo offline nunca llama este
+        endpoint ni /sesiones-clase, ver POST /asistencias/sincronizar.
+      x-permission: registrar_asistencia
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  required: [sesion_clase_id]
+                  properties:
+                    sesion_clase_id: { type: integer, example: 789 }
+                - $ref: '#/components/schemas/AsistenciaOnlineInput'
+      responses:
+        '201':
+          description: Asistencia registrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Asistencia' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '409':
+          description: Ya existe un registro para ese alumno en esa sesión (violación de unique sesion_clase_id+alumno_id)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /asistencias/lote:
+    post:
+      tags: [Docente]
+      summary: Registrar la asistencia de todo un grupo en una sola petición (modo online)
+      description: >
+        Igual que POST /asistencias pero para todo el grupo a la vez.
+        La sesión ya debe existir (abierta con POST /sesiones-clase).
+      x-permission: registrar_asistencia
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sesion_clase_id, registros]
+              properties:
+                sesion_clase_id: { type: integer }
+                registros:
+                  type: array
+                  items: { $ref: '#/components/schemas/AsistenciaOnlineInput' }
+      responses:
+        '201':
+          description: Resultado del lote — puede incluir errores parciales sin abortar el resto
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  creadas: { type: integer }
+                  errores:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        alumno_id: { type: integer }
+                        motivo: { type: string, example: "no pertenece al grupo de este horario" }
+                  asistencias:
+                    type: array
+                    items: { $ref: '#/components/schemas/Asistencia' }
+              examples:
+                todo_ok:
+                  value:
+                    creadas: 2
+                    errores: []
+                    asistencias:
+                      - { id: 4001, sesion_clase_id: 789, alumno_id: 1, estado: presente, uuid_local: null, origen: online, capturada_en: "2026-09-22T07:05:12-06:00", registrado_por: 4, sincronizada_en: null, created_at: "2026-09-22T07:05:12-06:00" }
+                      - { id: 4002, sesion_clase_id: 789, alumno_id: 2, estado: ausente, uuid_local: null, origen: online, capturada_en: "2026-09-22T07:05:12-06:00", registrado_por: 4, sincronizada_en: null, created_at: "2026-09-22T07:05:12-06:00" }
+                con_errores:
+                  value:
+                    creadas: 1
+                    errores:
+                      - { alumno_id: 999, motivo: "no pertenece al grupo de este horario" }
+                    asistencias:
+                      - { id: 4003, sesion_clase_id: 789, alumno_id: 3, estado: retardo, uuid_local: null, origen: online, capturada_en: "2026-09-22T07:05:40-06:00", registrado_por: 4, sincronizada_en: null, created_at: "2026-09-22T07:05:40-06:00" }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /asistencias/sincronizar:
+    post:
+      tags: [Docente]
+      summary: Sincronizar registros guardados en modo offline (CU-04, idempotente por uuid_local)
+      description: >
+        IMPORTANTE: a diferencia de /asistencias y /asistencias/lote, aquí
+        nunca se manda sesion_clase_id — el dispositivo, sin conexión,
+        jamás pudo pedirle uno al servidor. En su lugar cada lista trae
+        horario_id + fecha (datos que el docente ya conoce localmente) y
+        el servidor busca o crea la sesion_clase al sincronizar. Por eso
+        tampoco existe un POST /sesiones-clase previo en el flujo offline.
+        La app borra de su cola local lo que vuelva como creado o duplicado,
+        y deja conflicto/error visibles para que el docente los revise.
+      x-permission: registrar_asistencia
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [listas]
+              properties:
+                listas:
+                  type: array
+                  items:
+                    type: object
+                    required: [horario_id, fecha, registros]
+                    properties:
+                      horario_id: { type: integer }
+                      fecha: { type: string, format: date }
+                      registros:
+                        type: array
+                        items: { $ref: '#/components/schemas/AsistenciaOfflineRegistro' }
+            example:
+              listas:
+                - horario_id: 1
+                  fecha: "2026-09-22"
+                  registros:
+                    - { uuid_local: "550e8400-e29b-41d4-a716-446655440000", alumno_id: 1, estado: presente, capturada_en: "2026-09-22T07:32:10-06:00" }
+                    - { uuid_local: "6b1a2f3e-4c5d-4e6f-8a9b-0c1d2e3f4a5b", alumno_id: 2, estado: ausente, capturada_en: "2026-09-22T07:32:41-06:00" }
+      responses:
+        '200':
+          description: Resultado por cada registro enviado, para que el cliente sepa qué borrar de su cola local
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  resultados:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        uuid_local: { type: string }
+                        estado_sync:
+                          type: string
+                          enum: [creado, duplicado, conflicto, error]
+                          description: >
+                            creado = insertado; duplicado = ese uuid_local
+                            ya existía, no se tocó nada (reintento seguro);
+                            conflicto = ya había un registro de ese alumno
+                            en esa sesión con OTRO uuid_local, no se
+                            sobreescribe automáticamente; error = falló
+                            una validación (ver motivo)
+                        asistencia_id: { type: integer, nullable: true }
+                        motivo: { type: string }
+              examples:
+                todo_creado:
+                  value:
+                    resultados:
+                      - { uuid_local: "550e8400-e29b-41d4-a716-446655440000", estado_sync: creado, asistencia_id: 4101 }
+                      - { uuid_local: "6b1a2f3e-4c5d-4e6f-8a9b-0c1d2e3f4a5b", estado_sync: creado, asistencia_id: 4102 }
+                reintento_duplicado:
+                  value:
+                    resultados:
+                      - { uuid_local: "00000000-0000-4000-8000-000000000001", estado_sync: duplicado, asistencia_id: 3998 }
+                con_conflicto:
+                  value:
+                    resultados:
+                      - { uuid_local: "7c22d1e0-1111-4222-8333-444455556666", estado_sync: conflicto, asistencia_id: 3990, motivo: "ya existe un registro para este alumno en esta sesión con otro uuid_local" }
+                mixto:
+                  value:
+                    resultados:
+                      - { uuid_local: "550e8400-e29b-41d4-a716-446655440000", estado_sync: creado, asistencia_id: 4101 }
+                      - { uuid_local: "00000000-0000-4000-8000-000000000001", estado_sync: duplicado, asistencia_id: 3998 }
+                      - { uuid_local: "7c22d1e0-1111-4222-8333-444455556666", estado_sync: conflicto, asistencia_id: 3990, motivo: "ya existe un registro para este alumno en esta sesión con otro uuid_local" }
+                      - { uuid_local: "9f01aa00-2222-4333-8444-555566667777", estado_sync: error, asistencia_id: null, motivo: "alumno_id no pertenece al grupo de este horario" }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /asistencias/historial:
+    get:
+      tags: [Docente]
+      summary: Consultar historial de asistencias con filtros (CU-05)
+      description: >
+        Pertenencia (s5a-s7a): el docente solo ve sus grupos; el orientador,
+        los grupos que tiene asignados en orientador_grupo.
+      x-permission: consultar_asistencias
+      parameters:
+        - name: alumno_id
+          in: query
+          schema: { type: integer }
+        - name: grupo_id
+          in: query
+          schema: { type: integer }
+        - name: periodo_id
+          in: query
+          schema: { type: integer }
+        - name: fecha_inicio
+          in: query
+          schema: { type: string, format: date }
+        - name: fecha_fin
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Historial filtrado
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Asistencia' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  # ORIENTADOR
+  /semaforo-riesgo:
+    get:
+      tags: [Orientador]
+      summary: Consultar el semáforo de riesgo de inasistencia por alumno (CU-06)
+      description: >
+        Nivel = el umbral donde porcentaje_min <= porcentaje_inasistencia <
+        porcentaje_max (el nivel alto incluye el 100). El orientador solo ve
+        los grupos que tiene asignados.
+      x-permission: ver_semaforo_riesgo
+      parameters:
+        - name: grupo_id
+          in: query
+          schema: { type: integer }
+        - name: nivel
+          in: query
+          schema: { type: string, enum: [bajo, medio, alto] }
+      responses:
+        '200':
+          description: Lista de alumnos con su nivel de riesgo
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    alumno: { $ref: '#/components/schemas/Alumno' }
+                    porcentaje_inasistencia: { type: number, format: float }
+                    nivel_riesgo: { type: string, enum: [bajo, medio, alto] }
+                    color_hex: { type: string, example: "#16a34a" }
+              examples:
+                tres_niveles:
+                  value:
+                    - { alumno: { id: 1, matricula: "26071035000001", nombre: "Ana Sofía Gómez Pérez", activo: true, situacion_academica: regular }, porcentaje_inasistencia: 2.5, nivel_riesgo: bajo, color_hex: "#16a34a" }
+                    - { alumno: { id: 2, matricula: "26071035000002", nombre: "Carlos Eduardo Ruiz López", activo: true, situacion_academica: regular }, porcentaje_inasistencia: 5.0, nivel_riesgo: bajo, color_hex: "#16a34a" }
+                    - { alumno: { id: 19, matricula: "26071035000019", nombre: "Mariana Castillo Ortiz", activo: true, situacion_academica: regular }, porcentaje_inasistencia: 12.5, nivel_riesgo: medio, color_hex: "#f59e0b" }
+                    - { alumno: { id: 20, matricula: "26071035000020", nombre: "Óscar Méndez Ramos", activo: true, situacion_academica: irregular }, porcentaje_inasistencia: 17.5, nivel_riesgo: medio, color_hex: "#f59e0b" }
+                    - { alumno: { id: 24, matricula: "26071035000024", nombre: "Ximena Torres Aguilar", activo: true, situacion_academica: recursador }, porcentaje_inasistencia: 27.5, nivel_riesgo: alto, color_hex: "#dc2626" }
+                    - { alumno: { id: 25, matricula: "26071035000025", nombre: "Luis Ángel Pérez Nava", activo: true, situacion_academica: regular }, porcentaje_inasistencia: 35.0, nivel_riesgo: alto, color_hex: "#dc2626" }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /reportes:
+    get:
+      tags: [Orientador]
+      summary: Generar reporte de asistencias/calificaciones filtrado (CU-07)
+      x-permission: generar_reportes
+      parameters:
+        - name: grupo_id
+          in: query
+          schema: { type: integer }
+        - name: periodo_id
+          in: query
+          schema: { type: integer }
+        - name: formato
+          in: query
+          schema: { type: string, enum: [pdf, excel], default: pdf }
+      responses:
+        '200':
+          description: Archivo generado
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /observaciones:
+    post:
+      tags: [Orientador]
+      summary: Registrar una observación de seguimiento tutorial (CU-08)
+      x-permission: registrar_observacion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [alumno_id, texto]
+              properties:
+                alumno_id: { type: integer }
+                texto: { type: string }
+      responses:
+        '201':
+          description: Observación registrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Observacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+    get:
+      tags: [Orientador]
+      summary: Listar observaciones registradas
+      x-permission: registrar_observacion
+      parameters:
+        - name: alumno_id
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Lista de observaciones
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Observacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /notificaciones:
+    get:
+      tags: [Orientador]
+      summary: Listar notificaciones enviadas o pendientes
+      x-permission: notificar_tutor
+      parameters:
+        - name: estado
+          in: query
+          schema: { type: string, enum: [pendiente, enviada, fallida] }
+      responses:
+        '200':
+          description: Lista de notificaciones
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Notificacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    post:
+      tags: [Orientador]
+      summary: Enviar manualmente una notificación al tutor principal de un alumno (CU-09)
+      x-permission: notificar_tutor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [alumno_id, mensaje]
+              properties:
+                alumno_id: { type: integer }
+                mensaje: { type: string, maxLength: 500 }
+      responses:
+        '201':
+          description: >
+            Notificación creada y encolada para envío. El padre_tutor
+            destinatario (es_principal=1) y el canal (canal_preferido: sms o
+            email) se resuelven server-side, no se piden en el body.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Notificacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /alumnos/{alumno_id}/calificaciones:
+    get:
+      tags: [Orientador]
+      summary: Consultar calificaciones de un alumno (CU-15, también usado por Docente)
+      x-permission: consultar_calificaciones
+      parameters:
+        - $ref: '#/components/parameters/AlumnoId'
+        - name: periodo_id
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Lista de calificaciones
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Calificacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /asistencias/{asistencia_id}/justificacion:
+    post:
+      tags: [Orientador]
+      summary: Autorizar una justificación de inasistencia (CU-17)
+      x-permission: autorizar_justificacion
+      parameters:
+        - name: asistencia_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [motivo]
+              properties:
+                motivo: { type: string }
+                evidencia_url: { type: string }
+      responses:
+        '201':
+          description: >
+            Justificación registrada y la asistencia asociada se
+            actualiza a estado 'justificado'
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  # ADMINISTRADOR
+  /usuarios:
+    get:
+      tags: [Administrador]
+      summary: Listar usuarios del sistema (CU-10)
+      x-permission: gestionar_usuarios
+      responses:
+        '200':
+          description: Lista de usuarios
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Usuario' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    post:
+      tags: [Administrador]
+      summary: >
+        Crear un nuevo usuario (docente, orientador o administrador).
+        Si el rol es docente, se crea también su fila en docentes (numero_empleado).
+      x-permission: gestionar_usuarios
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsuarioInput' }
+      responses:
+        '201':
+          description: Usuario creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Usuario' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /usuarios/{usuario_id}:
+    parameters:
+      - $ref: '#/components/parameters/UsuarioId'
+    put:
+      tags: [Administrador]
+      summary: Editar un usuario existente
+      x-permission: gestionar_usuarios
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsuarioInput' }
+      responses:
+        '200':
+          description: Usuario actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Usuario' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+    delete:
+      tags: [Administrador]
+      summary: Desactivar (borrado lógico, activo=0) un usuario
+      x-permission: gestionar_usuarios
+      responses:
+        '204':
+          description: Usuario desactivado
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /roles:
+    get:
+      tags: [Administrador]
+      summary: Listar roles con sus permisos (CU-10)
+      x-permission: gestionar_usuarios
+      responses:
+        '200':
+          description: Lista de roles
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Rol' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /roles/{rol_id}/permisos:
+    put:
+      tags: [Administrador]
+      summary: Reemplazar el conjunto de permisos asignado a un rol (CU-10)
+      x-permission: gestionar_usuarios
+      parameters:
+        - name: rol_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permiso_ids]
+              properties:
+                permiso_ids:
+                  type: array
+                  items: { type: integer }
+      responses:
+        '200':
+          description: Permisos actualizados
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Rol' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /permisos:
+    get:
+      tags: [Administrador]
+      summary: Catálogo de permisos disponibles en el sistema (CU-10)
+      x-permission: gestionar_usuarios
+      responses:
+        '200':
+          description: Lista de permisos
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Permiso' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /alumnos:
+    get:
+      tags: [Administrador]
+      summary: Buscar/listar alumnos (la vía principal de alta es POST /importaciones, CU-14; esto es para consulta)
+      x-permission: consultar_alumnos
+      parameters:
+        - name: matricula
+          in: query
+          schema: { type: string }
+        - name: nombre
+          in: query
+          schema: { type: string }
+        - name: grupo_id
+          in: query
+          description: Filtra por inscripción vigente
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Lista de alumnos
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Alumno' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /padres-tutores:
+    get:
+      tags: [Administrador]
+      summary: Listar padres/tutores
+      x-permission: gestionar_catalogos
+      responses:
+        '200':
+          description: Lista de padres/tutores
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PadreTutor' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    post:
+      tags: [Administrador]
+      summary: Crear un padre/tutor
+      x-permission: gestionar_catalogos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PadreTutorInput' }
+      responses:
+        '201':
+          description: Padre/tutor creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PadreTutor' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /padres-tutores/{padre_tutor_id}:
+    parameters:
+      - $ref: '#/components/parameters/PadreTutorId'
+    put:
+      tags: [Administrador]
+      summary: Editar un padre/tutor
+      x-permission: gestionar_catalogos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PadreTutorInput' }
+      responses:
+        '200':
+          description: Padre/tutor actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PadreTutor' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /alumnos/{alumno_id}/padres:
+    parameters:
+      - $ref: '#/components/parameters/AlumnoId'
+    get:
+      tags: [Administrador]
+      summary: Listar los padres/tutores vinculados a un alumno
+      x-permission: gestionar_catalogos
+      responses:
+        '200':
+          description: Lista de padres/tutores del alumno, con parentesco y quién es el principal
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/PadreTutor'
+                    - type: object
+                      properties:
+                        parentesco: { type: string, example: madre }
+                        es_principal: { type: boolean }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    post:
+      tags: [Administrador]
+      summary: Vincular un padre/tutor existente a un alumno (CU-09)
+      x-permission: gestionar_catalogos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [padre_tutor_id]
+              properties:
+                padre_tutor_id: { type: integer }
+                parentesco: { type: string, example: madre }
+                es_principal: { type: boolean, default: false }
+      responses:
+        '201':
+          description: Vínculo creado
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /alumnos/{alumno_id}/padres/{padre_tutor_id}:
+    delete:
+      tags: [Administrador]
+      summary: Desvincular un padre/tutor de un alumno
+      x-permission: gestionar_catalogos
+      parameters:
+        - $ref: '#/components/parameters/AlumnoId'
+        - $ref: '#/components/parameters/PadreTutorId'
+      responses:
+        '204':
+          description: Vínculo eliminado
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /catalogos/planteles:
+    get:
+      tags: [Administrador]
+      summary: Listar planteles (CU-11)
+      x-permission: gestionar_catalogos
+      responses:
+        '200':
+          description: Lista de planteles
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Plantel' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    post:
+      tags: [Administrador]
+      summary: Crear un plantel
+      x-permission: gestionar_catalogos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clave, nombre]
+              properties:
+                clave: { type: string, example: "07ECB0043I" }
+                nombre: { type: string }
+      responses:
+        '201':
+          description: Plantel creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plantel' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /catalogos/grados:
+    get:
+      tags: [Administrador]
+      summary: Listar grados
+      x-permission: gestionar_catalogos
+      responses:
+        '200':
+          description: Lista de grados
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Grado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    post:
+      tags: [Administrador]
+      summary: Crear un grado
+      x-permission: gestionar_catalogos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nombre]
+              properties:
+                nombre: { type: string, example: "1" }
+      responses:
+        '201':
+          description: Grado creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Grado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /catalogos/grupos:
+    get:
+      tags: [Administrador]
+      summary: Listar todos los grupos del plantel
+      x-permission: gestionar_catalogos
+      responses:
+        '200':
+          description: Lista de grupos
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Grupo' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    post:
+      tags: [Administrador]
+      summary: Crear un grupo
+      x-permission: gestionar_catalogos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GrupoInput' }
+      responses:
+        '201':
+          description: Grupo creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Grupo' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /catalogos/materias:
+    get:
+      tags: [Administrador]
+      summary: Listar materias
+      x-permission: gestionar_catalogos
+      responses:
+        '200':
+          description: Lista de materias
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Materia' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    post:
+      tags: [Administrador]
+      summary: Crear una materia
+      x-permission: gestionar_catalogos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clave, nombre]
+              properties:
+                clave: { type: string, example: "A0021" }
+                nombre: { type: string }
+                tipo_evaluacion:
+                  type: string
+                  enum: [numerica, alfanumerica]
+                  default: numerica
+      responses:
+        '201':
+          description: Materia creada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Materia' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /catalogos/periodos-escolares:
+    get:
+      tags: [Administrador]
+      summary: Listar periodos escolares
+      x-permission: gestionar_catalogos
+      responses:
+        '200':
+          description: Lista de periodos
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PeriodoEscolar' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    post:
+      tags: [Administrador]
+      summary: Crear un periodo escolar
+      description: Solo puede haber un periodo con estado activo a la vez (regla de backend).
+      x-permission: gestionar_catalogos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nombre]
+              properties:
+                nombre: { type: string, example: "2026 B" }
+                fecha_inicio: { type: string, format: date }
+                fecha_fin: { type: string, format: date }
+                estado: { type: string, enum: [activo, cerrado], default: activo }
+      responses:
+        '201':
+          description: Periodo creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PeriodoEscolar' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /calificaciones/{calificacion_id}:
+    put:
+      tags: [Administrador]
+      summary: Editar una calificación (CU-16)
+      x-permission: editar_calificaciones
+      parameters:
+        - name: calificacion_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [calificacion]
+              properties:
+                calificacion:
+                  type: string
+                  example: "8"
+                  description: >
+                    Se valida contra configuraciones.escala_calificacion (10 o 100)
+                    si la materia es numérica, o contra A/NA si es alfanumérica
+      responses:
+        '200':
+          description: >
+            Calificación actualizada; origen pasa a 'manual' y
+            editado_por se llena con el usuario autenticado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Calificacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /orientadores/{usuario_id}/grupos:
+    parameters:
+      - $ref: '#/components/parameters/UsuarioId'
+    get:
+      tags: [Administrador]
+      summary: Consultar grupos asignados a un orientador (CU-18)
+      x-permission: gestionar_usuarios
+      responses:
+        '200':
+          description: Lista de grupos asignados
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Grupo' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    post:
+      tags: [Administrador]
+      summary: Asignar un grupo a un orientador (CU-18)
+      x-permission: gestionar_usuarios
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grupo_id]
+              properties:
+                grupo_id: { type: integer }
+      responses:
+        '201':
+          description: Grupo asignado
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /umbrales-riesgo:
+    get:
+      tags: [Administrador]
+      summary: Consultar los umbrales configurados del semáforo (CU-19)
+      x-permission: gestionar_configuracion
+      parameters:
+        - name: periodo_id
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Lista de umbrales
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/UmbralRiesgo' }
+              example:
+                - { id: 1, periodo_id: null, nivel: bajo, porcentaje_min: 0, porcentaje_max: 10, faltas_consecutivas: null, color_hex: "#16a34a" }
+                - { id: 2, periodo_id: null, nivel: medio, porcentaje_min: 10, porcentaje_max: 20, faltas_consecutivas: null, color_hex: "#f59e0b" }
+                - { id: 3, periodo_id: null, nivel: alto, porcentaje_min: 20, porcentaje_max: 100, faltas_consecutivas: null, color_hex: "#dc2626" }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    put:
+      tags: [Administrador]
+      summary: Actualizar los rangos de porcentaje de un nivel de riesgo (CU-19)
+      x-permission: gestionar_configuracion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UmbralRiesgo' }
+      responses:
+        '200':
+          description: Umbral actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UmbralRiesgo' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /configuraciones:
+    get:
+      tags: [Administrador]
+      summary: Consultar configuraciones generales del sistema (CU-19)
+      x-permission: gestionar_configuracion
+      responses:
+        '200':
+          description: Lista de configuraciones clave-valor
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Configuracion' }
+              example:
+                - { clave: escala_calificacion, valor: "10", tipo_dato: entero, descripcion: "Escala activa: 10 o 100" }
+                - { clave: zona_horaria, valor: "America/Mexico_City", tipo_dato: texto, descripcion: "Para interpretar capturada_en y agrupar sesiones por día" }
+                - { clave: retardos_equivalen_falta, valor: "0", tipo_dato: entero, descripcion: "Cuántos retardos cuentan como una falta en el semáforo; 0 = no cuentan" }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    put:
+      tags: [Administrador]
+      summary: Actualizar una configuración
+      x-permission: gestionar_configuracion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clave, valor]
+              properties:
+                clave: { type: string }
+                valor: { type: string }
+      responses:
+        '200':
+          description: Configuración actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Configuracion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /importaciones:
+    post:
+      tags: [Administrador]
+      summary: Subir archivo de ingesta masiva (CU-14)
+      x-permission: importar_datos
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [archivo, tipo]
+              properties:
+                archivo:
+                  type: string
+                  format: binary
+                tipo:
+                  type: string
+                  enum: [alumnos, calificaciones, docentes, catalogos]
+                periodo_id:
+                  type: integer
+      responses:
+        '202':
+          description: Archivo recibido y en proceso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  importacion_id: { type: integer }
+                  estado: { type: string, example: procesando }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /importaciones/{importacion_id}:
+    get:
+      tags: [Administrador]
+      summary: Consultar el estado y resultado de una importación
+      x-permission: importar_datos
+      parameters:
+        - name: importacion_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Estado de la importación
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  estado: { type: string, enum: [procesando, completado, con_errores, fallido] }
+                  filas_procesadas: { type: integer }
+                  filas_error: { type: integer }
+                  errores:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        fila: { type: integer }
+                        columna: { type: string, nullable: true }
+                        mensaje: { type: string }
+              examples:
+                procesando:
+                  value: { estado: procesando, filas_procesadas: 120, filas_error: 0, errores: [] }
+                completado:
+                  value: { estado: completado, filas_procesadas: 450, filas_error: 0, errores: [] }
+                con_errores:
+                  value:
+                    estado: con_errores
+                    filas_procesadas: 448
+                    filas_error: 2
+                    errores:
+                      - { fila: 17, columna: matricula, mensaje: "La matrícula 2607103500001 no tiene 14 dígitos." }
+                      - { fila: 203, columna: grupo, mensaje: "El grupo 4Z no existe en el periodo 2026 B." }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  # SISTEMA
+  # NOTA: no se expone ningún endpoint para dispositivos_padres, por decisión
+  # (2026-09-18): no hay push a padres en esta fase; las notificaciones a
+  # padres/tutores salen por SMS o correo según canal_preferido. La tabla
+  # queda creada en las migraciones sin uso. Si en la fase 2 se retoma el
+  # push a padres, la vía prevista es un link firmado de un solo uso enviado
+  # por SMS/WhatsApp — nunca un endpoint público sin autenticación, que
+  # permitiría a cualquiera registrarse como tutor de un alumno.
+  /dispositivos:
+    post:
+      tags: [Sistema]
+      summary: Registrar el token FCM del dispositivo del usuario autenticado, para notificaciones push (CU-20)
+      x-permission: autenticado
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token_fcm, plataforma]
+              properties:
+                token_fcm: { type: string }
+                plataforma: { type: string, enum: [android, ios, web] }
+      responses:
+        '201':
+          description: Dispositivo registrado (o reactivado si el token ya existía)
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
+  /sistema/alertas/ejecutar:
+    post:
+      tags: [Sistema]
+      summary: >
+        Disparar manualmente la detección de riesgo y generación de
+        alertas (CU-12; normalmente corre programado vía scheduler)
+      x-permission: ejecutar_alertas
+      responses:
+        '200':
+          description: Alertas generadas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  alertas_generadas: { type: integer }
+              example: { alertas_generadas: 6 }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Sanctum Token
+
+  parameters:
+    GrupoId:
+      name: grupo_id
+      in: path
+      required: true
+      schema: { type: integer }
+    AlumnoId:
+      name: alumno_id
+      in: path
+      required: true
+      schema: { type: integer }
+    UsuarioId:
+      name: usuario_id
+      in: path
+      required: true
+      schema: { type: integer }
+    PadreTutorId:
+      name: padre_tutor_id
+      in: path
+      required: true
+      schema: { type: integer }
+
+  responses:
+    NoAutenticado:
+      description: Falta el token Bearer, es inválido o fue revocado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            message: "No autenticado."
+    SinPermiso:
+      description: >
+        El usuario está autenticado pero su rol no tiene el permiso de la
+        operación (x-permission), o el recurso no le pertenece (middlewares
+        de pertenencia, s5a-s7a)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            message: "No tienes permiso para realizar esta acción."
+    NoEncontrado:
+      description: El recurso indicado en la ruta no existe
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            message: "Recurso no encontrado."
+    Conflicto:
+      description: La operación choca con un registro existente (llave única)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            message: "El registro ya existe."
+    ErrorValidacion:
+      description: El body no pasó la validación (forma estándar de Laravel)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorValidacion' }
+          example:
+            message: "Los datos enviados no son válidos. (y 1 error más)"
+            errors:
+              "listas.0.registros.0.uuid_local": ["El campo uuid_local es obligatorio."]
+              "listas.0.registros.0.capturada_en": ["El campo capturada_en es obligatorio."]
+
+  examples:
+    SesionDocente:
+      value:
+        id: 4
+        nombre: "Juan Carlos Méndez Ruiz"
+        username: docente1
+        correo: "docente1@cobach35.test"
+        rol: docente
+        activo: true
+        es_super_admin: false
+        permisos: [registrar_asistencia, consultar_asistencias, consultar_calificaciones]
+    SesionOrientador:
+      value:
+        id: 2
+        nombre: "María Elena Cruz Gómez"
+        username: orientador1
+        correo: "orientador1@cobach35.test"
+        rol: orientador
+        activo: true
+        es_super_admin: false
+        permisos: [consultar_asistencias, consultar_calificaciones, consultar_alumnos, ver_semaforo_riesgo, registrar_observacion, notificar_tutor, autorizar_justificacion, generar_reportes]
+    SesionAdministrador:
+      value:
+        id: 1
+        nombre: "Administrador del sistema"
+        username: admin
+        correo: "admin@cobach35.test"
+        rol: administrador
+        activo: true
+        es_super_admin: false
+        permisos: [gestionar_usuarios, gestionar_catalogos, gestionar_configuracion, registrar_asistencia, consultar_asistencias, autorizar_justificacion, ver_semaforo_riesgo, registrar_observacion, notificar_tutor, generar_reportes, consultar_alumnos, consultar_calificaciones, editar_calificaciones, importar_datos, ejecutar_alertas]
+
+  schemas:
+    Error:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string }
+
+    ErrorValidacion:
+      type: object
+      required: [message, errors]
+      properties:
+        message: { type: string }
+        errors:
+          type: object
+          description: Un arreglo de mensajes por cada campo que falló
+          additionalProperties:
+            type: array
+            items: { type: string }
+
+    Usuario:
+      type: object
+      properties:
+        id: { type: integer }
+        nombre: { type: string }
+        username: { type: string }
+        correo: { type: string, nullable: true }
+        rol:
+          type: string
+          description: >
+            Nombre del rol (hoy docente, orientador o administrador). Es string
+            libre, no enum: el RBAC admite roles nuevos sin cambiar el contrato.
+          example: docente
+        activo: { type: boolean }
+
+    UsuarioSesion:
+      description: >
+        Lo que devuelven /login y /me. Incluye la lista de permisos efectivos:
+        los clientes deciden qué pantallas y acciones mostrar según permisos,
+        no según el nombre del rol.
+      allOf:
+        - $ref: '#/components/schemas/Usuario'
+        - type: object
+          properties:
+            es_super_admin: { type: boolean }
+            permisos:
+              type: array
+              items: { type: string }
+              example: [registrar_asistencia, consultar_asistencias, consultar_calificaciones]
+
+    UsuarioInput:
+      type: object
+      required: [nombre, username, password, rol_id]
+      properties:
+        nombre: { type: string }
+        username: { type: string }
+        password: { type: string, format: password }
+        correo: { type: string, format: email }
+        rol_id: { type: integer }
+        numero_empleado:
+          type: string
+          description: Solo aplica si el rol asignado es docente
+
+    Plantel:
+      type: object
+      properties:
+        id: { type: integer }
+        clave: { type: string, example: "07ECB0043I" }
+        nombre: { type: string }
+
+    Grado:
+      type: object
+      properties:
+        id: { type: integer }
+        nombre: { type: string, example: "1" }
+
+    Materia:
+      type: object
+      properties:
+        id: { type: integer }
+        clave: { type: string, example: "A0021" }
+        nombre: { type: string }
+        tipo_evaluacion: { type: string, enum: [numerica, alfanumerica] }
+
+    PeriodoEscolar:
+      type: object
+      properties:
+        id: { type: integer }
+        nombre: { type: string, example: "2026 B" }
+        fecha_inicio: { type: string, format: date, nullable: true }
+        fecha_fin: { type: string, format: date, nullable: true }
+        estado: { type: string, enum: [activo, cerrado] }
+
+    Configuracion:
+      type: object
+      properties:
+        clave: { type: string }
+        valor: { type: string }
+        tipo_dato: { type: string, enum: [entero, decimal, texto, booleano] }
+        descripcion: { type: string, nullable: true }
+
+    Horario:
+      type: object
+      description: Combinación grupo + materia + horario asignada a un docente
+      properties:
+        id: { type: integer }
+        grupo: { $ref: '#/components/schemas/Grupo' }
+        materia:
+          type: object
+          properties:
+            id: { type: integer }
+            clave: { type: string }
+            nombre: { type: string }
+        dia_semana: { type: integer, minimum: 1, maximum: 7, description: "1=lunes ... 7=domingo" }
+        hora_inicio: { type: string, example: "07:00" }
+        hora_fin: { type: string, example: "07:50" }
+
+    Grupo:
+      type: object
+      properties:
+        id: { type: integer }
+        grado: { type: string, example: "1" }
+        letra: { type: string, example: "A" }
+        turno: { type: string, enum: [matutino, vespertino] }
+        plantel_id: { type: integer }
+        periodo_id: { type: integer }
+
+    GrupoInput:
+      type: object
+      required: [grado_id, plantel_id, periodo_id, letra, turno]
+      properties:
+        grado_id: { type: integer }
+        plantel_id: { type: integer }
+        periodo_id: { type: integer }
+        letra: { type: string, example: "A", maxLength: 1 }
+        turno: { type: string, enum: [matutino, vespertino] }
+
+    Alumno:
+      type: object
+      description: >
+        No incluye grupo_id: el grupo se obtiene vía la inscripción
+        vigente del alumno, no es un campo propio de esta tabla.
+      properties:
+        id: { type: integer }
+        matricula: { type: string }
+        nombre: { type: string }
+        activo: { type: boolean, description: "false = baja/deserción" }
+        situacion_academica:
+          type: string
+          enum: [regular, irregular, recursador, extemporaneo]
+          description: Proviene de la inscripción vigente del alumno
+
+    SesionClase:
+      type: object
+      properties:
+        id: { type: integer }
+        horario_id: { type: integer }
+        fecha: { type: string, format: date }
+        cancelada: { type: boolean }
+
+    AsistenciaOnlineInput:
+      type: object
+      description: >
+        Para POST /asistencias y /asistencias/lote. No se pide origen ni
+        capturada_en — el servidor los fija ('online' y now()).
+      required: [alumno_id, estado]
+      properties:
+        alumno_id: { type: integer }
+        estado:
+          type: string
+          enum: [presente, ausente, retardo, justificado]
+
+    AsistenciaOfflineRegistro:
+      type: object
+      description: Para POST /asistencias/sincronizar, dentro de cada lista (ver ese endpoint).
+      required: [uuid_local, alumno_id, estado, capturada_en]
+      properties:
+        uuid_local:
+          type: string
+          format: uuid
+          description: UUID generado en el dispositivo — identidad idempotente del registro
+        alumno_id: { type: integer }
+        estado:
+          type: string
+          enum: [presente, ausente, retardo, justificado]
+        capturada_en:
+          type: string
+          format: date-time
+          description: Momento real en que se pasó lista en el aula (hora local del dispositivo, con offset)
+
+    Asistencia:
+      type: object
+      properties:
+        id: { type: integer }
+        sesion_clase_id: { type: integer }
+        alumno_id: { type: integer }
+        estado:
+          type: string
+          enum: [presente, ausente, retardo, justificado]
+        uuid_local: { type: string, nullable: true }
+        origen: { type: string, enum: [online, offline] }
+        capturada_en: { type: string, format: date-time }
+        registrado_por: { type: integer, description: "usuario_id de quien registró (se llena server-side)" }
+        sincronizada_en: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    Observacion:
+      type: object
+      properties:
+        id: { type: integer }
+        alumno_id: { type: integer }
+        orientador_id: { type: integer }
+        fecha: { type: string, format: date }
+        texto: { type: string }
+
+    Notificacion:
+      type: object
+      properties:
+        id: { type: integer }
+        alumno_id: { type: integer }
+        padre_tutor_id: { type: integer }
+        tipo: { type: string, enum: [automatica, manual] }
+        canal:
+          type: string
+          enum: [sms, email]
+          description: "'push' queda reservado para la fase 2 (push a padres); en esta fase no se usa"
+        estado: { type: string, enum: [pendiente, enviada, fallida] }
+        mensaje: { type: string }
+        fecha_envio: { type: string, format: date-time, nullable: true }
+        error_detalle: { type: string, nullable: true }
+
+    Calificacion:
+      type: object
+      properties:
+        id: { type: integer }
+        alumno_id: { type: integer }
+        materia_id: { type: integer }
+        periodo_id: { type: integer }
+        parcial: { type: integer, enum: [1, 2, 3] }
+        calificacion: { type: string, description: "Numérica (según escala_calificacion) o A/NA según materias.tipo_evaluacion" }
+        tipo: { type: string, enum: [regular, cursadora] }
+        origen: { type: string, enum: [importado, manual] }
+
+    Rol:
+      type: object
+      properties:
+        id: { type: integer }
+        nombre: { type: string }
+        descripcion: { type: string, nullable: true }
+        permisos:
+          type: array
+          items: { $ref: '#/components/schemas/Permiso' }
+
+    Permiso:
+      type: object
+      properties:
+        id: { type: integer }
+        nombre: { type: string, example: registrar_asistencia }
+        descripcion: { type: string }
+
+    PadreTutor:
+      type: object
+      properties:
+        id: { type: integer }
+        nombre: { type: string }
+        telefono: { type: string, nullable: true }
+        correo: { type: string, nullable: true }
+        canal_preferido:
+          type: string
+          enum: [sms, email]
+          description: "'push' queda reservado para la fase 2; la API lo rechaza en esta fase"
+
+    PadreTutorInput:
+      type: object
+      required: [nombre]
+      description: >
+        Debe traer telefono si canal_preferido=sms, o correo si
+        canal_preferido=email (validación de backend).
+      properties:
+        nombre: { type: string }
+        telefono: { type: string }
+        correo: { type: string, format: email }
+        canal_preferido: { type: string, enum: [sms, email], default: sms }
+
+    UmbralRiesgo:
+      type: object
+      properties:
+        id: { type: integer }
+        periodo_id: { type: integer, nullable: true, description: "null = umbral global por defecto" }
+        nivel: { type: string, enum: [bajo, medio, alto] }
+        porcentaje_min: { type: number, format: float }
+        porcentaje_max: { type: number, format: float }
+        faltas_consecutivas: { type: integer, nullable: true }
+        color_hex: { type: string, example: "#16a34a" }
