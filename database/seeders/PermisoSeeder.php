@@ -24,6 +24,7 @@ class PermisoSeeder extends Seeder
         'editar_calificaciones' => 'Corregir calificaciones manualmente',
         'importar_datos' => 'Ingesta masiva de archivos',
         'ejecutar_alertas' => 'Disparar manualmente la detección de riesgo',
+        'ver_todos_los_grupos' => 'Ver cualquier grupo del plantel, no solo los propios (pertenencia)',
     ];
 
     public function run(): void

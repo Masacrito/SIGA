@@ -20,7 +20,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Docente
     Route::middleware('permiso:registrar_asistencia')->group(function () {
         Route::get('/mis-horarios', [Api\HorarioController::class, 'misHorarios']);
-        Route::get('/grupos/{grupo}/alumnos', [Api\GrupoController::class, 'alumnos']);
+        Route::get('/grupos/{grupo}/alumnos', [Api\GrupoController::class, 'alumnos'])->can('ver-grupo', 'grupo');
         Route::post('/sesiones-clase', [Api\SesionClaseController::class, 'store']);
         Route::post('/asistencias', [Api\AsistenciaController::class, 'store']);
         Route::post('/asistencias/lote', [Api\AsistenciaController::class, 'lote']);

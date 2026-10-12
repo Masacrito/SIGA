@@ -26,8 +26,8 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
-
- 
+ * Datos de prueba (solo local/testing). Ver sección 7.4 del checkpoint.
+ */
 class DemoSeeder extends Seeder
 {
     /** UUID ya sincronizado: reenviarlo debe responder "duplicado". */

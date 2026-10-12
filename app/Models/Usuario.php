@@ -75,4 +75,23 @@ class Usuario extends Authenticatable
     {
         return $this->es_super_admin || in_array($permiso, $this->permisos(), true);
     }
+
+    /**
+     * Pertenencia (el "sobre quién" del permiso): el docente ve los grupos
+     * donde tiene horario y el orientador los que tiene asignados.
+     * Quien tenga ver_todos_los_grupos (administrador) ve cualquiera.
+     */
+    public function puedeVerGrupo(Grupo $grupo): bool
+    {
+        return $this->tienePermiso('ver_todos_los_grupos')
+            || $this->gruposOrientados()->whereKey($grupo->id)->exists()
+            || $grupo->horarios()->whereHas('docente', fn ($q) => $q->where('usuario_id', $this->id))->exists();
+    }
+
+    /** Pasar lista en un horario: el docente dueño, o quien ve todos los grupos (suplencias). */
+    public function puedeUsarHorario(Horario $horario): bool
+    {
+        return $this->tienePermiso('ver_todos_los_grupos')
+            || ($this->docente && $this->docente->id === $horario->docente_id);
+    }
 }

@@ -16,7 +16,7 @@ class SuperAdminSeeder extends Seeder
      */
     public function run(): void
     {
-        $username = env('ADMIN_USERNAME', 'superadmin');
+        $username = env('ADMIN_USERNAME', 'admin');
         $password = env('ADMIN_PASSWORD');
 
         if (blank($password)) {
@@ -32,7 +32,7 @@ class SuperAdminSeeder extends Seeder
         if (! $usuario->exists) {
             $usuario->fill([
                 'rol_id' => Rol::where('nombre', 'administrador')->value('id'),
-                'nombre' => 'Súper administrador',
+                'nombre' => 'Administrador',
                 'password' => $password,
                 'activo' => true,
             ]);

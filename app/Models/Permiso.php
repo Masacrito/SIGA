@@ -3,12 +3,13 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Permiso extends Model
 {
     protected $table = 'permisos';
+
+    protected $hidden = ['pivot', 'created_at', 'updated_at'];
 
     protected $fillable = [
         'nombre',

@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: COBACH35 - Sistema de Seguimiento de Asistencias
+  title: SIGA - Sistema de Seguimiento de Asistencias
   description: |
     Especificación de endpoints del backend (frente "Interfaz" del cronograma)
     para el Sistema Web y Móvil de Seguimiento de Asistencias del COBACH 35.
@@ -191,7 +191,9 @@ paths:
       summary: Listar alumnos con inscripción vigente en un grupo
       description: >
         Pertenencia (s5a-s7a): un docente solo puede consultar grupos en los
-        que tiene al menos un horario asignado; si no, 403.
+        que tiene al menos un horario asignado; si no, 403. Quien tenga el
+        permiso ver_todos_los_grupos (administrador) puede consultar cualquiera.
+        Incluye bajas (activo=false) para que la lista cuadre con la de papel.
       x-permission: registrar_asistencia
       parameters:
         - $ref: '#/components/parameters/GrupoId'
@@ -219,6 +221,10 @@ paths:
     post:
       tags: [Docente]
       summary: Abrir una sesión de clase activa (necesaria antes de pasar lista online) (CU-03)
+      description: >
+        Pertenencia: solo el docente dueño del horario (o quien tenga
+        ver_todos_los_grupos); si no, 403. La fecha debe caer en el
+        dia_semana del horario; si no, 422.
       x-permission: registrar_asistencia
       requestBody:
         required: true
@@ -290,6 +296,8 @@ paths:
       description: >
         Igual que POST /asistencias pero para todo el grupo a la vez.
         La sesión ya debe existir (abierta con POST /sesiones-clase).
+        Un alumno que ya tiene registro en la sesión va a errores con
+        motivo "ya tiene registro en esta sesión" (no se sobreescribe).
       x-permission: registrar_asistencia
       requestBody:
         required: true
@@ -339,6 +347,11 @@ paths:
                       - { id: 4003, sesion_clase_id: 789, alumno_id: 3, estado: retardo, uuid_local: null, origen: online, capturada_en: "2026-09-22T07:05:40-06:00", registrado_por: 4, sincronizada_en: null, created_at: "2026-09-22T07:05:40-06:00" }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
+        '409':
+          description: La sesión está cancelada; no se puede pasar lista
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '422': { $ref: '#/components/responses/ErrorValidacion' }
 
   /asistencias/sincronizar:

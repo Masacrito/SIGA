@@ -28,7 +28,14 @@ class AuthController extends Controller
             return response()->json(['message' => 'Usuario o contraseña incorrectos.'], 401);
         }
 
-        $token = $usuario->createToken($datos['dispositivo'] ?? 'api')->plainTextToken;
+        // El token del sistema web vence (el navegador es más expuesto); el de la app
+        // móvil no, para no romper la cola offline del docente a media jornada.
+        $nombreToken = $datos['dispositivo'] ?? 'api';
+        $expira = $nombreToken === 'web'
+            ? now()->addMinutes((int) config('sanctum.web_token_minutos', 480))
+            : null;
+
+        $token = $usuario->createToken($nombreToken, ['*'], $expira)->plainTextToken;
 
         return response()->json([
             'token' => $token,

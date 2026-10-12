@@ -53,6 +53,13 @@ return [
     'expiration' => null,
 
     /*
+    | Minutos de vida del token emitido al sistema web (login con
+    | dispositivo = "web"). Los tokens de la app móvil no vencen por ahora.
+    */
+
+    'web_token_minutos' => (int) env('SANCTUM_WEB_TOKEN_MINUTOS', 480),
+
+    /*
     |--------------------------------------------------------------------------
     | Token Prefix
     |--------------------------------------------------------------------------

@@ -27,6 +27,13 @@ class SesionClase extends Model
         ];
     }
 
+    /** Busca o crea la sesión de horario+fecha. whereDate y no firstOrCreate: el cast date guarda "Y-m-d 00:00:00" y en SQLite no empata con "Y-m-d". */
+    public static function abrir(int $horarioId, string $fecha): self
+    {
+        return static::where('horario_id', $horarioId)->whereDate('fecha', $fecha)->first()
+            ?? static::create(['horario_id' => $horarioId, 'fecha' => $fecha]);
+    }
+
     public function horario(): BelongsTo
     {
         return $this->belongsTo(Horario::class, 'horario_id');
