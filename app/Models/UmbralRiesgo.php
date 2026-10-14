@@ -24,8 +24,9 @@ class UmbralRiesgo extends Model
     protected function casts(): array
     {
         return [
-            'porcentaje_min' => 'decimal:2',
-            'porcentaje_max' => 'decimal:2',
+            'porcentaje_min' => 'float',
+            'porcentaje_max' => 'float',
+            'faltas_consecutivas' => 'integer',
             'activo' => 'boolean',
         ];
     }

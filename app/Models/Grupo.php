@@ -21,6 +21,19 @@ class Grupo extends Model
         'turno',
     ];
 
+    /** Forma Grupo de openapi.yaml (requiere grado cargado). */
+    public function aApi(): array
+    {
+        return [
+            'id' => $this->id,
+            'grado' => $this->grado->nombre,
+            'letra' => $this->letra,
+            'turno' => $this->turno,
+            'plantel_id' => $this->plantel_id,
+            'periodo_id' => $this->periodo_id,
+        ];
+    }
+
     public function grado(): BelongsTo
     {
         return $this->belongsTo(Grado::class, 'grado_id');

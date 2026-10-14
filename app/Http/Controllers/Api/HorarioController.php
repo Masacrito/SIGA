@@ -23,14 +23,7 @@ class HorarioController extends Controller
 
         return response()->json($horarios->map(fn (Horario $h) => [
             'id' => $h->id,
-            'grupo' => [
-                'id' => $h->grupo->id,
-                'grado' => $h->grupo->grado->nombre,
-                'letra' => $h->grupo->letra,
-                'turno' => $h->grupo->turno,
-                'plantel_id' => $h->grupo->plantel_id,
-                'periodo_id' => $h->grupo->periodo_id,
-            ],
+            'grupo' => $h->grupo->aApi(),
             'materia' => $h->materia->only(['id', 'clave', 'nombre']),
             'dia_semana' => $h->dia_semana,
             'hora_inicio' => substr($h->hora_inicio, 0, 5),

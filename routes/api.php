@@ -57,6 +57,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/permisos', [Api\PermisoController::class, 'index']);
         Route::get('/orientadores/{usuario}/grupos', [Api\OrientadorGrupoController::class, 'index']);
         Route::post('/orientadores/{usuario}/grupos', [Api\OrientadorGrupoController::class, 'store']);
+        Route::delete('/orientadores/{usuario}/grupos/{grupo}', [Api\OrientadorGrupoController::class, 'destroy']);
     });
     Route::middleware('permiso:gestionar_catalogos')->group(function () {
         Route::prefix('catalogos')->group(function () {

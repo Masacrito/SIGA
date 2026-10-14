@@ -40,12 +40,23 @@ info:
          lo pedía, así que el servidor no tenía forma de saber a qué sesión
          pertenecía el registro.
 
+    CAMBIOS EN v1.4.0 (2026-10-12, paso 2 — administración):
+      - Usuario trae rol_id, numero_empleado y es_super_admin (la web los
+        necesita para editar). UsuarioInput: password solo obligatorio al crear;
+        activo opcional (reactivar una cuenta).
+      - Nuevo DELETE /orientadores/{usuario_id}/grupos/{grupo_id}.
+      - PUT /umbrales-riesgo recibe los tres niveles juntos ({ umbrales: [...] })
+        y valida que cubran 0–100 sin huecos ni traslapes.
+      - GET /catalogos/grupos acepta ?periodo_id; GET /padres-tutores acepta
+        ?buscar; GET /alumnos devuelve máximo 50.
+      - Abrir un periodo activo cierra el anterior.
+
     CAMBIOS EN v1.2.0 respecto de v1.1.0 (resumen):
       corrección offline-first de /asistencias/sincronizar (horario_id + fecha
       en vez de sesion_clase_id); AsistenciaInput separado en online/offline;
       resultados por registro en lote y sincronizar; gestión de roles/permisos,
       padres/tutores y GET /alumnos agregados.
-  version: 1.3.0
+  version: 1.4.0
 
 servers:
   - url: http://127.0.0.1:8000/api
@@ -712,6 +723,7 @@ paths:
       summary: >
         Crear un nuevo usuario (docente, orientador o administrador).
         Si el rol es docente, se crea también su fila en docentes (numero_empleado).
+        password es obligatorio aquí.
       x-permission: gestionar_usuarios
       requestBody:
         required: true
@@ -734,6 +746,11 @@ paths:
     put:
       tags: [Administrador]
       summary: Editar un usuario existente
+      description: >
+        Sin password se conserva la actual. activo=false revoca sus tokens.
+        Un administrador que no es súper admin no puede editar a un súper
+        admin (403). Nadie puede desactivarse a sí mismo (422).
+        es_super_admin no se puede cambiar por la API.
       x-permission: gestionar_usuarios
       requestBody:
         required: true
@@ -753,10 +770,12 @@ paths:
     delete:
       tags: [Administrador]
       summary: Desactivar (borrado lógico, activo=0) un usuario
+      description: Revoca todos sus tokens. 403 sobre un súper admin si quien llama no lo es; 422 sobre uno mismo.
       x-permission: gestionar_usuarios
       responses:
         '204':
           description: Usuario desactivado
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
@@ -829,6 +848,7 @@ paths:
     get:
       tags: [Administrador]
       summary: Buscar/listar alumnos (la vía principal de alta es POST /importaciones, CU-14; esto es para consulta)
+      description: Buscador; devuelve máximo 50, ordenados por nombre. matricula busca por prefijo, nombre por contenido.
       x-permission: consultar_alumnos
       parameters:
         - name: matricula
@@ -857,6 +877,11 @@ paths:
       tags: [Administrador]
       summary: Listar padres/tutores
       x-permission: gestionar_catalogos
+      parameters:
+        - name: buscar
+          in: query
+          description: Busca en nombre, teléfono y correo
+          schema: { type: string }
       responses:
         '200':
           description: Lista de padres/tutores
@@ -1054,6 +1079,10 @@ paths:
       tags: [Administrador]
       summary: Listar todos los grupos del plantel
       x-permission: gestionar_catalogos
+      parameters:
+        - name: periodo_id
+          in: query
+          schema: { type: integer }
       responses:
         '200':
           description: Lista de grupos
@@ -1075,12 +1104,13 @@ paths:
             schema: { $ref: '#/components/schemas/GrupoInput' }
       responses:
         '201':
-          description: Grupo creado
+          description: Grupo creado (la letra se guarda en mayúscula)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Grupo' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
+        '409': { $ref: '#/components/responses/Conflicto' }
         '422': { $ref: '#/components/responses/ErrorValidacion' }
 
   /catalogos/materias:
@@ -1144,7 +1174,9 @@ paths:
     post:
       tags: [Administrador]
       summary: Crear un periodo escolar
-      description: Solo puede haber un periodo con estado activo a la vez (regla de backend).
+      description: >
+        Solo puede haber un periodo con estado activo a la vez: crear uno
+        activo (el default) cierra el que estaba activo, en la misma transacción.
       x-permission: gestionar_catalogos
       requestBody:
         required: true
@@ -1239,11 +1271,33 @@ paths:
       responses:
         '201':
           description: Grupo asignado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Grupo' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
         '409': { $ref: '#/components/responses/Conflicto' }
-        '422': { $ref: '#/components/responses/ErrorValidacion' }
+        '422':
+          description: Validación, o el usuario no tiene el rol orientador
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /orientadores/{usuario_id}/grupos/{grupo_id}:
+    delete:
+      tags: [Administrador]
+      summary: Quitar un grupo a un orientador (CU-18)
+      x-permission: gestionar_usuarios
+      parameters:
+        - $ref: '#/components/parameters/UsuarioId'
+        - $ref: '#/components/parameters/GrupoId'
+      responses:
+        '204':
+          description: Grupo quitado
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
 
   /umbrales-riesgo:
     get:
@@ -1270,19 +1324,42 @@ paths:
         '403': { $ref: '#/components/responses/SinPermiso' }
     put:
       tags: [Administrador]
-      summary: Actualizar los rangos de porcentaje de un nivel de riesgo (CU-19)
+      summary: Actualizar los tres niveles del semáforo de una vez (CU-19)
+      description: >
+        Se mandan los tres niveles (bajo, medio, alto) del mismo periodo. Deben
+        cubrir 0–100 sin huecos ni traslapes: bajo empieza en 0, cada nivel
+        empieza donde termina el anterior y alto termina en 100. Por separado
+        no se puede garantizar, por eso van juntos.
       x-permission: gestionar_configuracion
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/UmbralRiesgo' }
+            schema:
+              type: object
+              required: [umbrales]
+              properties:
+                umbrales:
+                  type: array
+                  minItems: 3
+                  maxItems: 3
+                  items:
+                    type: object
+                    required: [id, porcentaje_min, porcentaje_max]
+                    properties:
+                      id: { type: integer }
+                      porcentaje_min: { type: number }
+                      porcentaje_max: { type: number }
+                      faltas_consecutivas: { type: integer, nullable: true, minimum: 1 }
+                      color_hex: { type: string, example: "#16a34a" }
       responses:
         '200':
-          description: Umbral actualizado
+          description: Los tres umbrales ya actualizados, en orden bajo, medio, alto
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/UmbralRiesgo' }
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/UmbralRiesgo' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
         '422': { $ref: '#/components/responses/ErrorValidacion' }
@@ -1318,8 +1395,8 @@ paths:
               type: object
               required: [clave, valor]
               properties:
-                clave: { type: string }
-                valor: { type: string }
+                clave: { type: string, description: Debe existir (422 si no) }
+                valor: { type: string, description: Se valida según tipo_dato; escala_calificacion solo 10 o 100 }
       responses:
         '200':
           description: Configuración actualizada
@@ -1328,7 +1405,6 @@ paths:
               schema: { $ref: '#/components/schemas/Configuracion' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
-        '404': { $ref: '#/components/responses/NoEncontrado' }
         '422': { $ref: '#/components/responses/ErrorValidacion' }
 
   /importaciones:
@@ -1591,12 +1667,15 @@ components:
         nombre: { type: string }
         username: { type: string }
         correo: { type: string, nullable: true }
+        rol_id: { type: integer }
         rol:
           type: string
           description: >
             Nombre del rol (hoy docente, orientador o administrador). Es string
             libre, no enum: el RBAC admite roles nuevos sin cambiar el contrato.
           example: docente
+        numero_empleado: { type: string, nullable: true, description: Solo docentes }
+        es_super_admin: { type: boolean }
         activo: { type: boolean }
 
     UsuarioSesion:
@@ -1616,11 +1695,12 @@ components:
 
     UsuarioInput:
       type: object
-      required: [nombre, username, password, rol_id]
+      required: [nombre, username, rol_id]
       properties:
         nombre: { type: string }
         username: { type: string }
-        password: { type: string, format: password }
+        password: { type: string, format: password, minLength: 8, description: "Obligatorio al crear; al editar, vacío = no cambia" }
+        activo: { type: boolean, description: Solo al editar (reactivar) }
         correo: { type: string, format: email }
         rol_id: { type: integer }
         numero_empleado:
@@ -1835,6 +1915,7 @@ components:
           type: string
           enum: [sms, email]
           description: "'push' queda reservado para la fase 2; la API lo rechaza en esta fase"
+        alumnos_count: { type: integer, description: Solo en GET /padres-tutores }
 
     PadreTutorInput:
       type: object
