@@ -11,7 +11,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
-/** Bloque 2.5: pasar lista online y sincronizar offline (datos del DemoSeeder). */
+/** Bloque 2.5: pasar lista online y sincronizar offline (datos del PruebasSeeder). */
 class AsistenciaTest extends TestCase
 {
     use RefreshDatabase;

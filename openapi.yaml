@@ -40,6 +40,15 @@ info:
          lo pedía, así que el servidor no tenía forma de saber a qué sesión
          pertenecía el registro.
 
+    CAMBIOS EN v1.5.0 (2026-10-14, paso 1 — semáforo, historial, expediente):
+      - /semaforo-riesgo documenta las reglas acordadas y cada fila trae grupo,
+        clases, ausencias, retardos, justificadas, faltas y racha_dias (SemaforoAlumno).
+      - /asistencias/historial pide alumno_id o grupo_id, acepta materia_id y
+        devuelve AsistenciaHistorial (fecha, materia, grupo, alumno, motivo).
+      - Nuevo GET /alumnos/{alumno_id} (expediente). Son 55 operaciones.
+      - GET /alumnos aplica pertenencia.
+      - faltas_consecutivas se cuenta en días hábiles seguidos sin venir.
+
     CAMBIOS EN v1.4.0 (2026-10-12, paso 2 — administración):
       - Usuario trae rol_id, numero_empleado y es_super_admin (la web los
         necesita para editar). UsuarioInput: password solo obligatorio al crear;
@@ -56,7 +65,7 @@ info:
       en vez de sesion_clase_id); AsistenciaInput separado en online/offline;
       resultados por registro en lote y sincronizar; gestión de roles/permisos,
       padres/tutores y GET /alumnos agregados.
-  version: 1.4.0
+  version: 1.5.0
 
 servers:
   - url: http://127.0.0.1:8000/api
@@ -461,14 +470,21 @@ paths:
       tags: [Docente]
       summary: Consultar historial de asistencias con filtros (CU-05)
       description: >
-        Pertenencia (s5a-s7a): el docente solo ve sus grupos; el orientador,
-        los grupos que tiene asignados en orientador_grupo.
+        Se pide alumno_id o grupo_id (422 si no viene ninguno). Por alumno
+        trae todo el periodo, incluidas las clases de un grupo anterior si lo
+        cambiaron. Pertenencia: el grupo pedido, o el grupo actual del alumno,
+        debe ser visible para el usuario (el docente, donde da clase; el
+        orientador, los que orienta); si no, 403. Más reciente primero.
+        periodo_id por omisión: el activo.
       x-permission: consultar_asistencias
       parameters:
         - name: alumno_id
           in: query
           schema: { type: integer }
         - name: grupo_id
+          in: query
+          schema: { type: integer }
+        - name: materia_id
           in: query
           schema: { type: integer }
         - name: periodo_id
@@ -487,19 +503,26 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/Asistencia' }
+                items: { $ref: '#/components/schemas/AsistenciaHistorial' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
 
-  # ORIENTADOR
   /semaforo-riesgo:
     get:
       tags: [Orientador]
       summary: Consultar el semáforo de riesgo de inasistencia por alumno (CU-06)
       description: >
-        Nivel = el umbral donde porcentaje_min <= porcentaje_inasistencia <
-        porcentaje_max (el nivel alto incluye el 100). El orientador solo ve
-        los grupos que tiene asignados.
+        Alumnos activos (sin bajas) del periodo activo, de los grupos que ve
+        el usuario (pertenencia; con ver_todos_los_grupos, todos), ordenados
+        del mayor al menor porcentaje. Reglas (2026-10-14): porcentaje =
+        faltas / clases con lista, sobre todo el periodo aunque el alumno haya
+        cambiado de grupo; faltas = ausencias + retardos ÷
+        retardos_equivalen_falta (3 = 1 falta); las justificadas no son falta
+        pero sí clase. Nivel = el umbral donde porcentaje_min <= % <
+        porcentaje_max (alto incluye el 100). Si un nivel tiene
+        faltas_consecutivas y racha_dias lo alcanza, sube a ese nivel.
+        grupo_id de un grupo que no ve → 403.
       x-permission: ver_semaforo_riesgo
       parameters:
         - name: grupo_id
@@ -515,22 +538,43 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  type: object
-                  properties:
-                    alumno: { $ref: '#/components/schemas/Alumno' }
-                    porcentaje_inasistencia: { type: number, format: float }
-                    nivel_riesgo: { type: string, enum: [bajo, medio, alto] }
-                    color_hex: { type: string, example: "#16a34a" }
+                items: { $ref: '#/components/schemas/SemaforoAlumno' }
               examples:
                 tres_niveles:
                   value:
-                    - { alumno: { id: 1, matricula: "26071035000001", nombre: "Ana Sofía Gómez Pérez", activo: true, situacion_academica: regular }, porcentaje_inasistencia: 2.5, nivel_riesgo: bajo, color_hex: "#16a34a" }
-                    - { alumno: { id: 2, matricula: "26071035000002", nombre: "Carlos Eduardo Ruiz López", activo: true, situacion_academica: regular }, porcentaje_inasistencia: 5.0, nivel_riesgo: bajo, color_hex: "#16a34a" }
-                    - { alumno: { id: 19, matricula: "26071035000019", nombre: "Mariana Castillo Ortiz", activo: true, situacion_academica: regular }, porcentaje_inasistencia: 12.5, nivel_riesgo: medio, color_hex: "#f59e0b" }
-                    - { alumno: { id: 20, matricula: "26071035000020", nombre: "Óscar Méndez Ramos", activo: true, situacion_academica: irregular }, porcentaje_inasistencia: 17.5, nivel_riesgo: medio, color_hex: "#f59e0b" }
-                    - { alumno: { id: 24, matricula: "26071035000024", nombre: "Ximena Torres Aguilar", activo: true, situacion_academica: recursador }, porcentaje_inasistencia: 27.5, nivel_riesgo: alto, color_hex: "#dc2626" }
-                    - { alumno: { id: 25, matricula: "26071035000025", nombre: "Luis Ángel Pérez Nava", activo: true, situacion_academica: regular }, porcentaje_inasistencia: 35.0, nivel_riesgo: alto, color_hex: "#dc2626" }
+                    - alumno: { id: 3, matricula: "2603500003", nombre: "Penagos Albores Dulce María", activo: true, situacion_academica: regular }
+                      grupo: { id: 1, grado: "1", letra: A, turno: matutino, plantel_id: 1, periodo_id: 1 }
+                      clases: 120
+                      ausencias: 12
+                      retardos: 0
+                      justificadas: 0
+                      faltas: 12
+                      porcentaje_inasistencia: 10.0
+                      racha_dias: 0
+                      nivel_riesgo: medio
+                      color_hex: "#f59e0b"
+                    - alumno: { id: 6, matricula: "2603500006", nombre: "García Martínez Rodrigo", activo: true, situacion_academica: regular }
+                      grupo: { id: 1, grado: "1", letra: A, turno: matutino, plantel_id: 1, periodo_id: 1 }
+                      clases: 120
+                      ausencias: 24
+                      retardos: 0
+                      justificadas: 0
+                      faltas: 24
+                      porcentaje_inasistencia: 20.0
+                      racha_dias: 0
+                      nivel_riesgo: alto
+                      color_hex: "#dc2626"
+                    - alumno: { id: 1, matricula: "2603500001", nombre: "Escobar Moguel Rodrigo", activo: true, situacion_academica: regular }
+                      grupo: { id: 1, grado: "1", letra: A, turno: matutino, plantel_id: 1, periodo_id: 1 }
+                      clases: 120
+                      ausencias: 2
+                      retardos: 4
+                      justificadas: 0
+                      faltas: 3
+                      porcentaje_inasistencia: 2.5
+                      racha_dias: 0
+                      nivel_riesgo: bajo
+                      color_hex: "#16a34a"
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
 
@@ -848,7 +892,11 @@ paths:
     get:
       tags: [Administrador]
       summary: Buscar/listar alumnos (la vía principal de alta es POST /importaciones, CU-14; esto es para consulta)
-      description: Buscador; devuelve máximo 50, ordenados por nombre. matricula busca por prefijo, nombre por contenido.
+      description: >
+        Buscador; devuelve máximo 50, ordenados por nombre (apellidos primero).
+        matricula busca por prefijo, nombre por contenido. Pertenencia: solo
+        alumnos inscritos en el periodo activo en grupos que el usuario ve
+        (con ver_todos_los_grupos, cualquiera).
       x-permission: consultar_alumnos
       parameters:
         - name: matricula
@@ -871,6 +919,27 @@ paths:
                 items: { $ref: '#/components/schemas/Alumno' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /alumnos/{alumno_id}:
+    get:
+      tags: [Orientador]
+      summary: Expediente del alumno (datos, grupo actual, riesgo del periodo y tutores)
+      description: >
+        Pertenencia: su grupo actual debe ser visible para el usuario (con
+        ver_todos_los_grupos, cualquiera); si no, 403. riesgo usa las mismas
+        reglas que /semaforo-riesgo; es null si no está inscrito en el periodo activo.
+      x-permission: consultar_alumnos
+      parameters:
+        - $ref: '#/components/parameters/AlumnoId'
+      responses:
+        '200':
+          description: Expediente
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlumnoExpediente' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
 
   /padres-tutores:
     get:
@@ -1834,6 +1903,79 @@ components:
           format: date-time
           description: Momento real en que se pasó lista en el aula (hora local del dispositivo, con offset)
 
+    SemaforoAlumno:
+      type: object
+      properties:
+        alumno: { $ref: '#/components/schemas/Alumno' }
+        grupo: { $ref: '#/components/schemas/Grupo' }
+        clases: { type: integer, description: Clases con lista tomada en el periodo }
+        ausencias: { type: integer }
+        retardos: { type: integer }
+        justificadas: { type: integer }
+        faltas: { type: integer, description: "ausencias + retardos ÷ retardos_equivalen_falta" }
+        porcentaje_inasistencia: { type: number, format: float, description: "faltas × 100 / clases, 2 decimales" }
+        racha_dias: { type: integer, description: Días hábiles más recientes seguidos sin venir a ninguna clase }
+        nivel_riesgo: { type: string, enum: [bajo, medio, alto] }
+        color_hex: { type: string, example: "#16a34a" }
+
+    RiesgoAlumno:
+      type: object
+      properties:
+        clases: { type: integer }
+        ausencias: { type: integer }
+        retardos: { type: integer }
+        justificadas: { type: integer }
+        faltas: { type: integer }
+        porcentaje_inasistencia: { type: number, format: float }
+        racha_dias: { type: integer }
+        nivel_riesgo: { type: string, enum: [bajo, medio, alto] }
+        color_hex: { type: string }
+
+    AlumnoExpediente:
+      allOf:
+        - $ref: '#/components/schemas/Alumno'
+        - type: object
+          properties:
+            grupo:
+              nullable: true
+              allOf: [{ $ref: '#/components/schemas/Grupo' }]
+            riesgo:
+              nullable: true
+              allOf: [{ $ref: '#/components/schemas/RiesgoAlumno' }]
+            tutores:
+              type: array
+              items:
+                allOf:
+                  - $ref: '#/components/schemas/PadreTutor'
+                  - type: object
+                    properties:
+                      parentesco: { type: string, nullable: true }
+                      es_principal: { type: boolean }
+
+    AsistenciaHistorial:
+      type: object
+      properties:
+        id: { type: integer }
+        fecha: { type: string, format: date }
+        hora_inicio: { type: string, example: "07:00" }
+        estado: { type: string, enum: [presente, ausente, retardo, justificado] }
+        origen: { type: string, enum: [online, offline] }
+        capturada_en: { type: string, format: date-time }
+        alumno:
+          type: object
+          properties:
+            id: { type: integer }
+            matricula: { type: string }
+            nombre: { type: string }
+        materia:
+          type: object
+          properties:
+            id: { type: integer }
+            clave: { type: string }
+            nombre: { type: string }
+        grupo: { $ref: '#/components/schemas/Grupo' }
+        motivo_justificacion: { type: string, nullable: true }
+
     Asistencia:
       type: object
       properties:
@@ -1937,5 +2079,5 @@ components:
         nivel: { type: string, enum: [bajo, medio, alto] }
         porcentaje_min: { type: number, format: float }
         porcentaje_max: { type: number, format: float }
-        faltas_consecutivas: { type: integer, nullable: true }
+        faltas_consecutivas: { type: integer, nullable: true, description: Días hábiles seguidos sin venir que suben al alumno a este nivel; null = desactivado }
         color_hex: { type: string, example: "#16a34a" }

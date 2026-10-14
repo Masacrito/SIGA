@@ -45,6 +45,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/asistencias/{asistencia}/justificacion', [Api\JustificacionController::class, 'store'])
         ->middleware('permiso:autorizar_justificacion');
     Route::get('/alumnos', [Api\AlumnoController::class, 'index'])->middleware('permiso:consultar_alumnos');
+    Route::get('/alumnos/{alumno}', [Api\AlumnoController::class, 'show'])->middleware('permiso:consultar_alumnos');
 
     // Administrador
     Route::middleware('permiso:gestionar_usuarios')->group(function () {

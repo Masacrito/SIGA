@@ -12,7 +12,7 @@ use App\Models\Usuario;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
-/** Paso 2: administración (usuarios, catálogos, tutores, configuración). Datos del DemoSeeder. */
+/** Paso 2: administración (usuarios, catálogos, tutores, configuración). Datos del PruebasSeeder. */
 class AdministracionTest extends TestCase
 {
     use RefreshDatabase;
@@ -111,7 +111,7 @@ class AdministracionTest extends TestCase
         $this->como('admin');
         $this->postJson('/api/catalogos/materias', ['clave' => 'B0101', 'nombre' => 'Física I'])->assertCreated()->assertJson(['tipo_evaluacion' => 'numerica']);
         $this->postJson('/api/catalogos/materias', ['clave' => 'B0101', 'nombre' => 'Otra'])->assertUnprocessable();
-        $this->postJson('/api/catalogos/grados', ['nombre' => '4'])->assertCreated();
+        $this->postJson('/api/catalogos/grados', ['nombre' => '7'])->assertCreated();
         $this->postJson('/api/catalogos/planteles', ['clave' => '07ECB0099Z', 'nombre' => 'Plantel 99'])->assertCreated();
 
         $periodo = PeriodoEscolar::activo();

@@ -9,7 +9,8 @@ class GradoSeeder extends Seeder
 {
     public function run(): void
     {
-        foreach (['1', '2', '3'] as $nombre) {
+        // Semestres del bachillerato: nones de agosto a enero, pares de febrero a julio
+        foreach (['1', '2', '3', '4', '5', '6'] as $nombre) {
             Grado::firstOrCreate(['nombre' => $nombre]);
         }
     }

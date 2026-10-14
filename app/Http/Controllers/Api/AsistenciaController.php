@@ -4,7 +4,10 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Asistencia;
+use App\Models\Grupo;
 use App\Models\Horario;
+use App\Models\Inscripcion;
+use App\Models\PeriodoEscolar;
 use App\Models\SesionClase;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -129,9 +132,54 @@ class AsistenciaController extends Controller
         return response()->json(['resultados' => $resultados]);
     }
 
-    public function historial(): JsonResponse
+    /**
+     * CU-05: asistencias de un alumno (todo el periodo, aunque haya cambiado de
+     * grupo) o de un grupo. Se pide uno de los dos: sin filtro serían decenas de miles.
+     */
+    public function historial(Request $request): JsonResponse
     {
-        return $this->noImplementado();
+        $datos = $request->validate([
+            'alumno_id' => ['required_without:grupo_id', 'nullable', 'integer', 'exists:alumnos,id'],
+            'grupo_id' => ['required_without:alumno_id', 'nullable', 'integer', 'exists:grupos,id'],
+            'periodo_id' => ['nullable', 'integer', 'exists:periodos_escolares,id'],
+            'materia_id' => ['nullable', 'integer'],
+            'fecha_inicio' => ['nullable', 'date'],
+            'fecha_fin' => ['nullable', 'date', 'after_or_equal:fecha_inicio'],
+        ]);
+        $periodoId = $datos['periodo_id'] ?? PeriodoEscolar::activo()?->id;
+
+        // Pertenencia: el grupo pedido, o el grupo actual del alumno, debe ser visible
+        $grupoAVer = $datos['grupo_id'] ?? Inscripcion::where('alumno_id', $datos['alumno_id'])->where('periodo_id', $periodoId)->value('grupo_id');
+        abort_unless($grupoAVer && Grupo::visiblesPara($request->user())->whereKey($grupoAVer)->exists(), 403, 'No tienes permiso para realizar esta acción.');
+
+        $filas = Asistencia::query()
+            ->with(['alumno:id,matricula,nombre', 'sesion.horario.materia:id,clave,nombre', 'sesion.horario.grupo.grado', 'justificacion:id,asistencia_id,motivo'])
+            ->join('sesiones_clase as s', 's.id', '=', 'asistencias.sesion_clase_id')
+            ->join('horarios as h', 'h.id', '=', 's.horario_id')
+            ->join('grupos as g', 'g.id', '=', 'h.grupo_id')
+            ->join('alumnos as al', 'al.id', '=', 'asistencias.alumno_id')
+            ->where('g.periodo_id', $periodoId)
+            ->when($datos['alumno_id'] ?? null, fn ($q, $id) => $q->where('asistencias.alumno_id', $id))
+            ->when($datos['grupo_id'] ?? null, fn ($q, $id) => $q->where('h.grupo_id', $id))
+            ->when($datos['materia_id'] ?? null, fn ($q, $id) => $q->where('h.materia_id', $id))
+            ->when($datos['fecha_inicio'] ?? null, fn ($q, $f) => $q->whereDate('s.fecha', '>=', $f))
+            ->when($datos['fecha_fin'] ?? null, fn ($q, $f) => $q->whereDate('s.fecha', '<=', $f))
+            ->orderByDesc('s.fecha')->orderByDesc('h.hora_inicio')->orderBy('al.nombre')
+            ->select('asistencias.*')
+            ->get();
+
+        return response()->json($filas->map(fn (Asistencia $a) => [
+            'id' => $a->id,
+            'fecha' => $a->sesion->fecha->toDateString(),
+            'hora_inicio' => substr($a->sesion->horario->hora_inicio, 0, 5),
+            'estado' => $a->estado,
+            'origen' => $a->origen,
+            'capturada_en' => $a->capturada_en?->toIso8601String(),
+            'alumno' => $a->alumno->only(['id', 'matricula', 'nombre']),
+            'materia' => $a->sesion->horario->materia->only(['id', 'clave', 'nombre']),
+            'grupo' => $a->sesion->horario->grupo->aApi(),
+            'motivo_justificacion' => $a->justificacion?->motivo,
+        ]));
     }
 
     /** Sesión del docente y no cancelada; si no, 403 / 409. */

@@ -7,7 +7,7 @@ use App\Models\Usuario;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
-/** Pertenencia: cada quien ve solo sus grupos (datos del DemoSeeder). */
+/** Pertenencia: cada quien ve solo sus grupos (datos del PruebasSeeder). */
 class PertenenciaGrupoTest extends TestCase
 {
     use RefreshDatabase;
