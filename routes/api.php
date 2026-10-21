@@ -4,7 +4,7 @@ use App\Http\Controllers\Api;
 use Illuminate\Support\Facades\Route;
 
 /*
-| Rutas de la API — contrato: openapi.yaml v1.3.0.
+| Rutas de la API — contrato: openapi.yaml v1.6.0.
 | Cada ruta lleva el permiso de su x-permission. Los controladores que aún
 | responden 501 se van implementando desde s5a; mientras, móvil y web usan el
 | mock de Prism.
@@ -72,6 +72,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/materias', [Api\Catalogos\MateriaController::class, 'store']);
             Route::get('/periodos-escolares', [Api\Catalogos\PeriodoEscolarController::class, 'index']);
             Route::post('/periodos-escolares', [Api\Catalogos\PeriodoEscolarController::class, 'store']);
+            Route::get('/docentes', [Api\Catalogos\DocenteController::class, 'index']);
         });
         Route::get('/padres-tutores', [Api\PadreTutorController::class, 'index']);
         Route::post('/padres-tutores', [Api\PadreTutorController::class, 'store']);
@@ -79,6 +80,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/alumnos/{alumno}/padres', [Api\AlumnoPadreController::class, 'index']);
         Route::post('/alumnos/{alumno}/padres', [Api\AlumnoPadreController::class, 'store']);
         Route::delete('/alumnos/{alumno}/padres/{padreTutor}', [Api\AlumnoPadreController::class, 'destroy']);
+        // Carga manual: alumnos con su inscripción y horarios (docente ↔ grupo)
+        Route::post('/alumnos', [Api\AlumnoController::class, 'store']);
+        Route::put('/alumnos/{alumno}', [Api\AlumnoController::class, 'update']);
+        Route::get('/horarios', [Api\HorarioController::class, 'index']);
+        Route::post('/horarios', [Api\HorarioController::class, 'store']);
+        Route::put('/horarios/{horario}', [Api\HorarioController::class, 'update']);
+        Route::delete('/horarios/{horario}', [Api\HorarioController::class, 'destroy']);
     });
     Route::middleware('permiso:gestionar_configuracion')->group(function () {
         Route::get('/umbrales-riesgo', [Api\UmbralRiesgoController::class, 'index']);

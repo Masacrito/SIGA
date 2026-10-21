@@ -5,10 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Alumno;
 use App\Models\Grupo;
+use App\Models\Inscripcion;
 use App\Models\PeriodoEscolar;
 use App\Support\Semaforo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class AlumnoController extends Controller
 {
@@ -36,7 +40,8 @@ class AlumnoController extends Controller
             ->when($request->input('nombre'), fn ($q, $n) => $q->where('nombre', 'like', "%{$n}%"))
             ->when($request->integer('grupo_id'), fn ($q, $g) => $q->whereHas('inscripciones', fn ($q) => $q->where('grupo_id', $g)->where('periodo_id', $periodoId)))
             ->orderBy('nombre')
-            ->limit(50) // es un buscador: con 50 basta, se afina con los filtros
+            // Es un buscador: con 50 basta, se afina con los filtros. Por grupo es la lista completa
+            ->limit($request->integer('grupo_id') ? 100 : 50)
             ->get();
 
         return response()->json($alumnos->map(fn (Alumno $a) => $a->only(['id', 'matricula', 'nombre', 'activo']) + [
@@ -62,5 +67,86 @@ class AlumnoController extends Controller
                 'es_principal' => (bool) $t->pivot->es_principal,
             ]),
         ]);
+    }
+
+    /** Alta manual: el alumno y su inscripción en un grupo del periodo activo (así aparece en la lista). */
+    public function store(Request $request): JsonResponse
+    {
+        $datos = $this->validar($request);
+
+        $alumno = DB::transaction(function () use ($datos) {
+            $alumno = Alumno::create($datos + ['activo' => true]);
+            $this->inscribir($alumno, $datos);
+
+            return $alumno;
+        });
+
+        return response()->json($this->forma($alumno), 201);
+    }
+
+    /**
+     * Edición, baja (activo = false) y cambio de grupo. Cambiar de grupo mueve
+     * la inscripción del periodo activo; su asistencia anterior se conserva y
+     * sigue contando para el semáforo.
+     */
+    public function update(Request $request, Alumno $alumno): JsonResponse
+    {
+        $datos = $this->validar($request, $alumno);
+
+        DB::transaction(function () use ($alumno, $datos) {
+            $alumno->update($datos);
+            $this->inscribir($alumno, $datos);
+        });
+
+        return response()->json($this->forma($alumno));
+    }
+
+    private function validar(Request $request, ?Alumno $alumno = null): array
+    {
+        $datos = $request->validate([
+            'matricula' => ['required', 'string', 'max:20', Rule::unique('alumnos', 'matricula')->ignore($alumno)],
+            'nombre' => ['required', 'string', 'max:200'],
+            'activo' => ['sometimes', 'boolean'],
+            // Al editar, sin grupo_id la inscripción no cambia
+            'grupo_id' => [$alumno ? 'sometimes' : 'required', 'integer', 'exists:grupos,id'],
+            'situacion_academica' => ['sometimes', 'in:regular,irregular,recursador,extemporaneo'],
+        ]);
+        $datos['nombre'] = preg_replace('/\s+/u', ' ', trim($datos['nombre']));
+
+        if (isset($datos['grupo_id']) && Grupo::whereKey($datos['grupo_id'])->value('periodo_id') !== PeriodoEscolar::activo()?->id) {
+            throw ValidationException::withMessages(['grupo_id' => 'El grupo no es del periodo activo.']);
+        }
+
+        return $datos;
+    }
+
+    /** Una inscripción por alumno y periodo (llave única): se crea o se actualiza. */
+    private function inscribir(Alumno $alumno, array $datos): void
+    {
+        $periodoId = PeriodoEscolar::activo()?->id;
+        $cambios = array_intersect_key($datos, ['grupo_id' => true, 'situacion_academica' => true]);
+        $inscripcion = Inscripcion::firstWhere(['alumno_id' => $alumno->id, 'periodo_id' => $periodoId]);
+
+        if ($inscripcion) {
+            $inscripcion->update($cambios);
+        } elseif (isset($cambios['grupo_id'])) {
+            Inscripcion::create($cambios + [
+                'alumno_id' => $alumno->id,
+                'periodo_id' => $periodoId,
+                'situacion_academica' => 'regular',
+                'fecha_inscripcion' => today(),
+            ]);
+        }
+    }
+
+    /** Forma AlumnoAdmin: Alumno + su grupo del periodo activo. */
+    private function forma(Alumno $alumno): array
+    {
+        $inscripcion = $alumno->inscripciones()->where('periodo_id', PeriodoEscolar::activo()?->id)->with('grupo.grado')->first();
+
+        return $alumno->only(['id', 'matricula', 'nombre', 'activo']) + [
+            'situacion_academica' => $inscripcion?->situacion_academica,
+            'grupo' => $inscripcion?->grupo->aApi(),
+        ];
     }
 }

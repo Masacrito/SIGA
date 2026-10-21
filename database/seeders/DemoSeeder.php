@@ -110,8 +110,10 @@ class DemoSeeder extends Seeder
 
             return;
         }
-        if (Usuario::where('username', 'orientador.matutino')->exists()) {
-            $this->command?->warn('El demo ya existe; usa migrate:fresh --seed para regenerarlo.');
+        // Solo sobre una base limpia: cualquier usuario además del súper admin
+        // (de este demo o de uno anterior) chocaría con los usernames del demo
+        if (Usuario::where('es_super_admin', false)->exists()) {
+            $this->command?->warn('Ya hay datos de un demo; usa migrate:fresh --seed para regenerarlo.');
 
             return;
         }

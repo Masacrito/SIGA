@@ -29,6 +29,25 @@ class Horario extends Model
         ];
     }
 
+    /** Forma HorarioAdmin de openapi.yaml (requiere grupo.grado, materia, docente.usuario y sesiones_count). */
+    public function aApiAdmin(): array
+    {
+        return [
+            'id' => $this->id,
+            'grupo' => $this->grupo->aApi(),
+            'materia' => $this->materia->only(['id', 'clave', 'nombre']),
+            'docente' => [
+                'id' => $this->docente->id,
+                'usuario_id' => $this->docente->usuario_id,
+                'nombre' => $this->docente->usuario->nombre,
+            ],
+            'dia_semana' => $this->dia_semana,
+            'hora_inicio' => substr($this->hora_inicio, 0, 5),
+            'hora_fin' => substr($this->hora_fin, 0, 5),
+            'listas_capturadas' => (int) $this->sesiones_count,
+        ];
+    }
+
     /** ¿La fecha (Y-m-d) cae en el día de la semana de este horario? 1=lunes ... 7=domingo */
     public function correspondeA(string $fecha): bool
     {
