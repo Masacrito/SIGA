@@ -54,9 +54,7 @@ class AlumnoController extends Controller
     {
         $periodo = PeriodoEscolar::activo();
         $inscripcion = $alumno->inscripciones()->where('periodo_id', $periodo?->id)->with('grupo.grado')->first();
-        $visible = $request->user()->tienePermiso('ver_todos_los_grupos')
-            || ($inscripcion && Grupo::visiblesPara($request->user())->whereKey($inscripcion->grupo_id)->exists());
-        abort_unless($visible, 403, 'No tienes permiso para realizar esta acción.');
+        abort_unless($request->user()->puedeVerAlumno($alumno), 403, 'No tienes permiso para realizar esta acción.');
 
         return response()->json($alumno->only(['id', 'matricula', 'nombre', 'activo']) + [
             'situacion_academica' => $inscripcion?->situacion_academica,

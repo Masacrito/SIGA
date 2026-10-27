@@ -4,7 +4,7 @@ use App\Http\Controllers\Api;
 use Illuminate\Support\Facades\Route;
 
 /*
-| Rutas de la API — contrato: openapi.yaml v1.6.0.
+| Rutas de la API — contrato: openapi.yaml v1.7.0.
 | Cada ruta lleva el permiso de su x-permission. Los controladores que aún
 | responden 501 se van implementando desde s5a; mientras, móvil y web usan el
 | mock de Prism.

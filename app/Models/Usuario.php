@@ -88,6 +88,20 @@ class Usuario extends Authenticatable
             || $grupo->horarios()->whereHas('docente', fn ($q) => $q->where('usuario_id', $this->id))->exists();
     }
 
+    /**
+     * Un alumno es visible si su grupo del periodo activo lo es (expediente,
+     * observaciones, calificaciones). Sin inscripción activa solo lo ve quien ve todo.
+     */
+    public function puedeVerAlumno(Alumno $alumno): bool
+    {
+        if ($this->tienePermiso('ver_todos_los_grupos')) {
+            return true;
+        }
+        $grupoId = $alumno->inscripciones()->where('periodo_id', PeriodoEscolar::activo()?->id)->value('grupo_id');
+
+        return $grupoId && Grupo::visiblesPara($this)->whereKey($grupoId)->exists();
+    }
+
     /** Pasar lista en un horario: el docente dueño, o quien ve todos los grupos (suplencias). */
     public function puedeUsarHorario(Horario $horario): bool
     {

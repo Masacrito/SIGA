@@ -23,7 +23,7 @@ return [
 
     'allowed_headers' => ['*'],
 
-    'exposed_headers' => [],
+    'exposed_headers' => ['Content-Disposition'], // el web toma de ahí el nombre del reporte
 
     'max_age' => 0,
 

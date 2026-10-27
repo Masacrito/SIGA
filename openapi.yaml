@@ -40,6 +40,18 @@ info:
          lo pedía, así que el servidor no tenía forma de saber a qué sesión
          pertenecía el registro.
 
+    CAMBIOS EN v1.7.0 (2026-10-25, paso 4 — seguimiento):
+      - Observaciones, justificantes, calificaciones y reportes con lógica real.
+        Mismas 62 operaciones; solo se precisan formas y errores.
+      - Pertenencia en las cuatro: solo alumnos/grupos visibles para el usuario (403).
+      - Observacion trae alumno y orientador; GET /observaciones sin alumno_id
+        devuelve las 100 más recientes de los grupos visibles.
+      - POST /asistencias/{id}/justificacion devuelve Justificacion; 422 si la
+        asistencia es 'presente', 409 si ya tiene justificante.
+      - Calificacion trae materia, editado_por y actualizada_en. PUT valida
+        contra la escala (0 a 10 o 0 a 100, un decimal) o A/NA.
+      - /reportes: grupo_id obligatorio; columnas y nombre de archivo documentados.
+
     CAMBIOS EN v1.6.0 (2026-10-21, carga manual — alumnos y horarios):
       - El docente queda ligado a sus grupos por el horario; hasta ahora no
         había forma de crearlo fuera del seeder. Nuevos GET/POST /horarios y
@@ -78,7 +90,7 @@ info:
       en vez de sesion_clase_id); AsistenciaInput separado en online/offline;
       resultados por registro en lote y sincronizar; gestión de roles/permisos,
       padres/tutores y GET /alumnos agregados.
-  version: 1.6.0
+  version: 1.7.0
 
 servers:
   - url: http://127.0.0.1:8000/api
@@ -595,13 +607,22 @@ paths:
     get:
       tags: [Orientador]
       summary: Generar reporte de asistencias/calificaciones filtrado (CU-07)
+      description: >
+        Reporte de un grupo en su periodo: una fila por alumno activo (las bajas
+        no aparecen), en orden de lista, con matrícula, situación, clases,
+        faltas, retardos, justificadas, % de inasistencia y nivel (mismo cálculo
+        del semáforo) y promedio de las calificaciones numéricas del periodo.
+        El nombre del archivo viene en Content-Disposition
+        (SIGA_asistencia_<grupo>_<turno>_<periodo>.pdf|xlsx).
       x-permission: generar_reportes
       parameters:
         - name: grupo_id
           in: query
+          required: true
           schema: { type: integer }
         - name: periodo_id
           in: query
+          description: Opcional; si viene, debe ser el periodo del grupo (422)
           schema: { type: integer }
         - name: formato
           in: query
@@ -616,11 +637,13 @@ paths:
               schema: { type: string, format: binary }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
 
   /observaciones:
     post:
       tags: [Orientador]
       summary: Registrar una observación de seguimiento tutorial (CU-08)
+      description: La fecha es la de hoy y el autor el usuario autenticado. 403 si el alumno no es de sus grupos.
       x-permission: registrar_observacion
       requestBody:
         required: true
@@ -631,7 +654,7 @@ paths:
               required: [alumno_id, texto]
               properties:
                 alumno_id: { type: integer }
-                texto: { type: string }
+                texto: { type: string, maxLength: 2000 }
       responses:
         '201':
           description: Observación registrada
@@ -644,6 +667,10 @@ paths:
     get:
       tags: [Orientador]
       summary: Listar observaciones registradas
+      description: >
+        Con alumno_id, toda la bitácora del alumno (403 si no es de sus grupos).
+        Sin él, las 100 más recientes de los grupos que ve el usuario.
+        De la más reciente a la más antigua.
       x-permission: registrar_observacion
       parameters:
         - name: alumno_id
@@ -710,6 +737,7 @@ paths:
     get:
       tags: [Orientador]
       summary: Consultar calificaciones de un alumno (CU-15, también usado por Docente)
+      description: Por defecto del periodo activo; ordenadas por materia y parcial. 403 si el alumno no es de sus grupos.
       x-permission: consultar_calificaciones
       parameters:
         - $ref: '#/components/parameters/AlumnoId'
@@ -746,13 +774,18 @@ paths:
               type: object
               required: [motivo]
               properties:
-                motivo: { type: string }
-                evidencia_url: { type: string }
+                motivo: { type: string, maxLength: 255 }
+                evidencia_url: { type: string, format: uri, maxLength: 255, nullable: true }
       responses:
         '201':
           description: >
             Justificación registrada y la asistencia asociada se
-            actualiza a estado 'justificado'
+            actualiza a estado 'justificado' (sigue contando como clase, ya no
+            como falta). Solo faltas o retardos (422 si es 'presente'); 409 si
+            ya tiene justificante; 403 si el grupo no es del usuario.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Justificacion' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
@@ -1463,8 +1496,10 @@ paths:
                   type: string
                   example: "8"
                   description: >
-                    Se valida contra configuraciones.escala_calificacion (10 o 100)
-                    si la materia es numérica, o contra A/NA si es alfanumérica
+                    Se valida contra configuraciones.escala_calificacion (0 a 10
+                    o 0 a 100, un decimal como máximo; se guarda normalizado:
+                    "08.0" → "8") si la materia es numérica, o contra A/NA si es
+                    alfanumérica (sin importar mayúsculas)
       responses:
         '200':
           description: >
@@ -2228,6 +2263,29 @@ components:
         orientador_id: { type: integer }
         fecha: { type: string, format: date }
         texto: { type: string }
+        alumno:
+          type: object
+          properties:
+            id: { type: integer }
+            matricula: { type: string }
+            nombre: { type: string }
+        orientador:
+          type: object
+          description: Quién la escribió (puede ser un administrador)
+          properties:
+            id: { type: integer }
+            nombre: { type: string }
+
+    Justificacion:
+      type: object
+      properties:
+        id: { type: integer }
+        asistencia_id: { type: integer }
+        motivo: { type: string }
+        evidencia_url: { type: string, nullable: true }
+        autorizada_por: { type: integer }
+        fecha_autorizacion: { type: string, format: date-time }
+        estado: { type: string, enum: [justificado], description: Nuevo estado de la asistencia }
 
     Notificacion:
       type: object
@@ -2256,6 +2314,21 @@ components:
         calificacion: { type: string, description: "Numérica (según escala_calificacion) o A/NA según materias.tipo_evaluacion" }
         tipo: { type: string, enum: [regular, cursadora] }
         origen: { type: string, enum: [importado, manual] }
+        materia:
+          type: object
+          properties:
+            id: { type: integer }
+            clave: { type: string }
+            nombre: { type: string }
+            tipo_evaluacion: { type: string, enum: [numerica, alfanumerica] }
+        editado_por:
+          type: object
+          nullable: true
+          description: Quién la corrigió a mano (null si viene de importación)
+          properties:
+            id: { type: integer }
+            nombre: { type: string }
+        actualizada_en: { type: string, format: date-time, nullable: true }
 
     Rol:
       type: object
