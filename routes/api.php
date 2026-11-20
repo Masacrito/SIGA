@@ -4,7 +4,7 @@ use App\Http\Controllers\Api;
 use Illuminate\Support\Facades\Route;
 
 /*
-| Rutas de la API — contrato: openapi.yaml v1.7.0.
+| Rutas de la API — contrato: openapi.yaml v1.9.0.
 | Cada ruta lleva el permiso de su x-permission. Los controladores que aún
 | responden 501 se van implementando desde s5a; mientras, móvil y web usan el
 | mock de Prism.
@@ -15,6 +15,11 @@ Route::post('/login', [Api\AuthController::class, 'login']);
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [Api\AuthController::class, 'logout']);
     Route::get('/me', [Api\AuthController::class, 'me']);
+    Route::put('/me/password', [Api\AuthController::class, 'cambiarPassword']);
+});
+
+// Con contraseña temporal solo se llega a lo de arriba, hasta cambiarla
+Route::middleware(['auth:sanctum', 'password.vigente'])->group(function () {
     Route::post('/dispositivos', [Api\DispositivoController::class, 'store']);
 
     // Docente
@@ -97,6 +102,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/calificaciones/{calificacion}', [Api\CalificacionController::class, 'update'])
         ->middleware('permiso:editar_calificaciones');
     Route::middleware('permiso:importar_datos')->group(function () {
+        Route::get('/importaciones/plantilla', [Api\ImportacionController::class, 'plantilla']);
+        Route::get('/importaciones', [Api\ImportacionController::class, 'index']);
         Route::post('/importaciones', [Api\ImportacionController::class, 'store']);
         Route::get('/importaciones/{importacion}', [Api\ImportacionController::class, 'show']);
     });

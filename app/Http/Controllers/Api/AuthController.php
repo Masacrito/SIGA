@@ -57,7 +57,29 @@ class AuthController extends Controller
         return response()->json($this->sesion($request->user()->load('rol.permisos')));
     }
 
-    /** Forma UsuarioSesion de openapi.yaml v1.3.0. */
+    /**
+     * PUT /me/password — cambia la contraseña propia. Es lo único que puede hacer
+     * (además de /me y /logout) quien trae una contraseña temporal. Cierra las
+     * demás sesiones: quien conociera la contraseña anterior queda fuera.
+     */
+    public function cambiarPassword(Request $request): JsonResponse
+    {
+        $datos = $request->validate([
+            'password_actual' => ['required', 'string', 'current_password'],
+            'password' => ['required', 'string', 'min:8', 'max:255', 'different:password_actual'],
+        ], [
+            'password_actual.current_password' => 'La contraseña actual no es correcta.',
+            'password.different' => 'La contraseña nueva debe ser distinta de la actual.',
+        ]);
+
+        $usuario = $request->user();
+        $usuario->forceFill(['password' => $datos['password'], 'debe_cambiar_password' => false])->save();
+        $usuario->tokens()->whereKeyNot($usuario->currentAccessToken()->id)->delete();
+
+        return response()->json($this->sesion($usuario->load('rol.permisos')));
+    }
+
+    /** Forma UsuarioSesion de openapi.yaml. */
     private function sesion(Usuario $usuario): array
     {
         return [
@@ -68,6 +90,7 @@ class AuthController extends Controller
             'rol' => $usuario->rol?->nombre,
             'activo' => $usuario->activo,
             'es_super_admin' => $usuario->es_super_admin,
+            'debe_cambiar_password' => $usuario->debe_cambiar_password,
             'permisos' => $usuario->permisos(),
         ];
     }

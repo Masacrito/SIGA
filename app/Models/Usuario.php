@@ -40,6 +40,7 @@ class Usuario extends Authenticatable
             'password' => 'hashed',
             'es_super_admin' => 'boolean',
             'activo' => 'boolean',
+            'debe_cambiar_password' => 'boolean',
         ];
     }
 
@@ -57,6 +58,24 @@ class Usuario extends Authenticatable
     public function gruposOrientados(): BelongsToMany
     {
         return $this->belongsToMany(Grupo::class, 'orientador_grupo', 'usuario_id', 'grupo_id');
+    }
+
+    /**
+     * Docente u orientador → su fila en docentes (los horarios cuelgan de ella; los
+     * orientadores también dan clase). Si cambia de rol la fila se queda, sus horarios
+     * la referencian. Si deja de ser orientador pierde sus grupos: si no, seguiría
+     * viendo a sus alumnos. Sin numero_empleado en $datos se conserva el que tenía.
+     */
+    public function sincronizarRol(array $datos): void
+    {
+        $rol = Rol::whereKey($this->rol_id)->value('nombre');
+
+        if ($rol !== 'orientador') {
+            $this->gruposOrientados()->detach();
+        }
+        if (in_array($rol, Rol::FRENTE_A_GRUPO, true)) {
+            $this->docente()->updateOrCreate([], array_intersect_key($datos, ['numero_empleado' => true]));
+        }
     }
 
     public function dispositivos(): HasMany

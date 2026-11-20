@@ -37,16 +37,10 @@ class PadreTutorController extends Controller
         return response()->json($padreTutor);
     }
 
-    /** Sin push en esta fase (2026-09-18): el canal debe tener a dónde llegar. */
     private function validar(Request $request): array
     {
         $request->mergeIfMissing(['canal_preferido' => 'sms']);
 
-        return $request->validate([
-            'nombre' => ['required', 'string', 'max:150'],
-            'canal_preferido' => ['required', 'in:sms,email'],
-            'telefono' => ['nullable', 'string', 'regex:/^[0-9 +()-]{7,20}$/', 'required_if:canal_preferido,sms'],
-            'correo' => ['nullable', 'email', 'max:160', 'required_if:canal_preferido,email'],
-        ]);
+        return $request->validate(PadreTutor::reglas());
     }
 }

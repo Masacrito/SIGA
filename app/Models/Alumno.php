@@ -4,7 +4,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -25,6 +24,28 @@ class Alumno extends Model
         return [
             'activo' => 'boolean',
         ];
+    }
+
+    /**
+     * Una inscripción por alumno y periodo (llave única): crea o actualiza la del
+     * periodo activo con grupo_id / situacion_academica, si vienen en $datos.
+     */
+    public function inscribir(array $datos): void
+    {
+        $periodoId = PeriodoEscolar::activo()?->id;
+        $cambios = array_intersect_key($datos, ['grupo_id' => true, 'situacion_academica' => true]);
+        $inscripcion = Inscripcion::firstWhere(['alumno_id' => $this->id, 'periodo_id' => $periodoId]);
+
+        if ($inscripcion) {
+            $inscripcion->update($cambios);
+        } elseif (isset($cambios['grupo_id'])) {
+            Inscripcion::create($cambios + [
+                'alumno_id' => $this->id,
+                'periodo_id' => $periodoId,
+                'situacion_academica' => 'regular',
+                'fecha_inscripcion' => today(),
+            ]);
+        }
     }
 
     public function inscripciones(): HasMany

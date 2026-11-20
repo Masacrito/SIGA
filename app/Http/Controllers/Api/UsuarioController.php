@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Rol;
 use App\Models\Usuario;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -27,7 +26,7 @@ class UsuarioController extends Controller
 
         $usuario = DB::transaction(function () use ($datos) {
             $usuario = Usuario::create($datos);
-            $this->sincronizarRol($usuario, $datos);
+            $usuario->sincronizarRol($datos);
 
             return $usuario;
         });
@@ -46,7 +45,7 @@ class UsuarioController extends Controller
 
         DB::transaction(function () use ($usuario, $datos) {
             $usuario->update($datos);
-            $this->sincronizarRol($usuario, $datos);
+            $usuario->sincronizarRol($datos);
             // Cuenta desactivada: sus sesiones abiertas dejan de servir en el acto
             if (! $usuario->activo) {
                 $usuario->tokens()->delete();
@@ -88,25 +87,6 @@ class UsuarioController extends Controller
         }
 
         return $datos;
-    }
-
-    /** Rol docente → su fila en docentes (los horarios cuelgan de ella). */
-    /**
-     * Rol docente → su fila en docentes (los horarios cuelgan de ella); si deja
-     * de ser docente la fila se queda, sus horarios la referencian.
-     * Si deja de ser orientador pierde sus grupos: si no, seguiría viendo sus alumnos.
-     */
-    private function sincronizarRol(Usuario $usuario, array $datos): void
-    {
-        $rol = Rol::whereKey($datos['rol_id'])->value('nombre');
-
-        if ($rol !== 'orientador') {
-            $usuario->gruposOrientados()->detach();
-        }
-        if ($rol === 'docente') {
-            // Sin numero_empleado en la petición se conserva el que tenía
-            $usuario->docente()->updateOrCreate([], array_intersect_key($datos, ['numero_empleado' => true]));
-        }
     }
 
     /** Un administrador común no puede tocar a un súper admin (le cambiaría la contraseña). */

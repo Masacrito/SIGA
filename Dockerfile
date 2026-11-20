@@ -3,7 +3,8 @@
 FROM php:8.4-fpm-bookworm
 
 COPY --from=mlocati/php-extension-installer:2 /usr/bin/install-php-extensions /usr/local/bin/
-RUN install-php-extensions pdo_mysql bcmath intl zip opcache pcntl
+# gd y zip: los pide phpoffice/phpspreadsheet (plantillas de importación)
+RUN install-php-extensions pdo_mysql bcmath intl zip gd opcache pcntl
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 

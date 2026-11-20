@@ -8,6 +8,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Rol extends Model
 {
+    /** Roles que dan clase: tienen fila en docentes y pueden estar en un horario. */
+    const FRENTE_A_GRUPO = ['docente', 'orientador'];
+
     protected $table = 'roles';
 
     protected $hidden = ['created_at', 'updated_at'];

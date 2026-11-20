@@ -4,7 +4,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -20,6 +19,17 @@ class PadreTutor extends Model
         'correo',
         'canal_preferido',
     ];
+
+    /** Sin push en esta fase (2026-09-18): el canal debe tener a dónde llegar. También las usa la importación. */
+    public static function reglas(): array
+    {
+        return [
+            'nombre' => ['required', 'string', 'max:150'],
+            'canal_preferido' => ['required', 'in:sms,email'],
+            'telefono' => ['nullable', 'string', 'regex:/^[0-9 +()-]{7,20}$/', 'required_if:canal_preferido,sms'],
+            'correo' => ['nullable', 'email', 'max:160', 'required_if:canal_preferido,email'],
+        ];
+    }
 
     public function alumnos(): BelongsToMany
     {

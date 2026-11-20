@@ -4,15 +4,16 @@ namespace App\Http\Controllers\Api\Catalogos;
 
 use App\Http\Controllers\Controller;
 use App\Models\Docente;
+use App\Models\Rol;
 use Illuminate\Http\JsonResponse;
 
-/** Docentes que se pueden poner en un horario: cuenta activa y con rol docente. */
+/** Quién puede dar una clase: cuenta activa con rol docente u orientador (también dan clase). */
 class DocenteController extends Controller
 {
     public function index(): JsonResponse
     {
         $docentes = Docente::with('usuario')
-            ->whereHas('usuario', fn ($q) => $q->where('activo', true)->whereRelation('rol', 'nombre', 'docente'))
+            ->whereHas('usuario', fn ($q) => $q->where('activo', true)->whereHas('rol', fn ($q) => $q->whereIn('nombre', Rol::FRENTE_A_GRUPO)))
             ->get()
             ->sortBy('usuario.nombre');
 

@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Alumno;
 use App\Models\Calificacion;
-use App\Models\Configuracion;
 use App\Models\PeriodoEscolar;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -39,17 +38,10 @@ class CalificacionController extends Controller
         $calificacion->load('alumno', 'materia');
         abort_unless($request->user()->puedeVerAlumno($calificacion->alumno), 403, 'No tienes permiso para realizar esta acción.');
 
-        $valor = strtoupper(trim($request->input('calificacion')));
-        if ($calificacion->materia->tipo_evaluacion === 'alfanumerica') {
-            if (! in_array($valor, ['A', 'NA'], true)) {
-                throw ValidationException::withMessages(['calificacion' => 'Esta materia se califica con A (acreditada) o NA (no acreditada).']);
-            }
-        } else {
-            $escala = (int) Configuracion::valor('escala_calificacion', 10);
-            if (! preg_match('/^\d{1,3}(\.\d)?$/', $valor) || (float) $valor > $escala) {
-                throw ValidationException::withMessages(['calificacion' => "La calificación debe ser un número de 0 a {$escala}, con un decimal como máximo."]);
-            }
-            $valor = (string) (float) $valor; // "08.0" → "8", "8.50" no pasa la regex
+        try {
+            $valor = Calificacion::normalizar($request->input('calificacion'), $calificacion->materia->tipo_evaluacion);
+        } catch (\InvalidArgumentException $e) {
+            throw ValidationException::withMessages(['calificacion' => $e->getMessage()]);
         }
 
         $calificacion->update(['calificacion' => $valor, 'origen' => 'manual', 'editado_por' => $request->user()->id]);

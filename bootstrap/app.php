@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\ExigirCambioPassword;
 use App\Http\Middleware\VerificarPermiso;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
@@ -19,6 +20,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'permiso' => VerificarPermiso::class,
+            'password.vigente' => ExigirCambioPassword::class,
         ]);
 
         // Es una API: sin token no se redirige a ninguna página de login,

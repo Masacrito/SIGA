@@ -40,6 +40,30 @@ info:
          lo pedía, así que el servidor no tenía forma de saber a qué sesión
          pertenecía el registro.
 
+    CAMBIOS EN v1.9.0 (2026-11-14, importación de docentes y orientadores):
+      - Plantilla e importación tipo "docentes": hoja Personal (una fila por
+        persona, por número de empleado; para orientadores, los grupos que
+        orienta) y hoja Clases (persona + grupo + materia con la hora de cada
+        día = horarios). Los errores traen "hoja".
+      - Cuentas nuevas con contraseña temporal: POST /importaciones las
+        devuelve una sola vez en "credenciales".
+      - Nuevo PUT /me/password. UsuarioSesion trae debe_cambiar_password: con
+        contraseña temporal, toda operación menos /me, /logout y /me/password
+        responde 403 con codigo "debe_cambiar_password". Son 65 operaciones.
+      - El rol orientador también tiene registrar_asistencia (todos dan clase):
+        aparece en /catalogos/docentes y puede usar los endpoints de pasar lista
+        en sus propios horarios.
+
+    CAMBIOS EN v1.8.0 (2026-11-12, paso 3 — importación con plantillas):
+      - Nuevo GET /importaciones/plantilla?tipo=alumnos|calificaciones (con
+        grupo_id y parcial para calificaciones): plantilla .xlsx que genera SIGA.
+      - Nuevo GET /importaciones (historial). Son 64 operaciones.
+      - POST /importaciones solo recibe el archivo (el tipo sale de la plantilla),
+        se procesa en la misma petición y responde 201 con el resultado; todo o
+        nada. Ya no hay estado "procesando" ni periodo_id (siempre el activo).
+        Por ahora tipos alumnos y calificaciones; docentes y catálogos después.
+      - Esquemas Importacion e ImportacionDetalle.
+
     CAMBIOS EN v1.7.0 (2026-10-25, paso 4 — seguimiento):
       - Observaciones, justificantes, calificaciones y reportes con lógica real.
         Mismas 62 operaciones; solo se precisan formas y errores.
@@ -90,7 +114,7 @@ info:
       en vez de sesion_clase_id); AsistenciaInput separado en online/offline;
       resultados por registro en lote y sincronizar; gestión de roles/permisos,
       padres/tutores y GET /alumnos agregados.
-  version: 1.7.0
+  version: 1.9.0
 
 servers:
   - url: http://127.0.0.1:8000/api
@@ -185,6 +209,36 @@ paths:
                 orientador: { $ref: '#/components/examples/SesionOrientador' }
                 administrador: { $ref: '#/components/examples/SesionAdministrador' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /me/password:
+    put:
+      tags: [Autenticación]
+      summary: Cambiar la contraseña propia
+      description: |
+        Obligatorio antes de usar el sistema cuando UsuarioSesion.debe_cambiar_password
+        es true (cuenta creada por importación, con contraseña temporal): hasta
+        entonces las demás operaciones responden 403 con
+        { "message": "...", "codigo": "debe_cambiar_password" }.
+        Cierra las demás sesiones del usuario; el token de esta petición sigue vigente.
+      x-permission: autenticado
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password_actual, password]
+              properties:
+                password_actual: { type: string, format: password }
+                password: { type: string, format: password, minLength: 8, description: Distinta de la actual }
+      responses:
+        '200':
+          description: Contraseña cambiada; debe_cambiar_password queda en false
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsuarioSesion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
 
   # DOCENTE
   /mis-horarios:
@@ -1279,7 +1333,7 @@ paths:
   /catalogos/docentes:
     get:
       tags: [Administrador]
-      summary: Docentes que se pueden asignar a un horario (cuenta activa y rol docente)
+      summary: Quién puede dar una clase (cuenta activa con rol docente u orientador)
       x-permission: gestionar_catalogos
       responses:
         '200':
@@ -1683,10 +1737,68 @@ paths:
         '403': { $ref: '#/components/responses/SinPermiso' }
         '422': { $ref: '#/components/responses/ErrorValidacion' }
 
+  /importaciones/plantilla:
+    get:
+      tags: [Administrador]
+      summary: Descargar la plantilla de Excel para llenar (CU-14)
+      description: |
+        La genera SIGA al momento con los datos del periodo activo:
+        - alumnos: una fila por alumno y su tutor principal; listas desplegables
+          con los grupos del periodo activo, situación, parentesco y canal.
+        - calificaciones: de un grupo en un parcial; ya trae la lista del grupo
+          (sin bajas) y una columna por materia de su horario, con lo ya capturado.
+        - docentes: hoja Personal (número de empleado, nombre, rol docente u
+          orientador, correo, grupos que orienta) y hoja Clases (número de
+          empleado, grupo, materia y la hora de lunes a sábado como 07:00-07:50).
+        Lleva una hoja oculta con tipo, versión y metadatos para reconocerla al subirla.
+        Nombre del archivo en Content-Disposition (SIGA_plantilla_alumnos_2026_b.xlsx,
+        SIGA_calificaciones_1a_matutino_parcial_1_2026_b.xlsx).
+      x-permission: importar_datos
+      parameters:
+        - { name: tipo, in: query, required: true, schema: { type: string, enum: [alumnos, calificaciones, docentes] } }
+        - { name: grupo_id, in: query, required: false, description: Obligatorio con tipo=calificaciones; grupo del periodo activo, schema: { type: integer } }
+        - { name: parcial, in: query, required: false, description: Obligatorio con tipo=calificaciones, schema: { type: integer, minimum: 1, maximum: 3 } }
+      responses:
+        '200':
+          description: Plantilla .xlsx
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '422': { $ref: '#/components/responses/ErrorValidacion' }
+
   /importaciones:
+    get:
+      tags: [Administrador]
+      summary: Historial de importaciones (las 30 más recientes)
+      x-permission: importar_datos
+      responses:
+        '200':
+          description: Importaciones, la más reciente primero (sin la lista de errores)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Importacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
     post:
       tags: [Administrador]
-      summary: Subir archivo de ingesta masiva (CU-14)
+      summary: Subir una plantilla llena (CU-14)
+      description: |
+        El tipo sale de la propia plantilla. Se procesa en la misma petición.
+        Todo o nada: se valida el archivo completo y, si alguna fila tiene error,
+        no se guarda ninguna; la importación queda con_errores con la fila, la
+        columna y el motivo de cada error. Reimportar no duplica: alumnos por
+        matrícula; calificaciones por alumno + materia + parcial (una que cambió
+        en SIGA después de descargar la plantilla se marca como error en vez de
+        pisarla); docentes y orientadores por número de empleado, y sus clases
+        por grupo + materia + día (se actualizan hora y quién la da; ni el
+        grupo ni la persona pueden quedar con clases encimadas). La importación
+        de docentes nunca modifica cuentas de administración. Un archivo que no es plantilla de SIGA vigente (otro Excel,
+        versión vieja, columnas movidas, otro periodo, hoja vacía) responde 422
+        y no se registra.
       x-permission: importar_datos
       requestBody:
         required: true
@@ -1694,26 +1806,49 @@ paths:
           multipart/form-data:
             schema:
               type: object
-              required: [archivo, tipo]
+              required: [archivo]
               properties:
-                archivo:
-                  type: string
-                  format: binary
-                tipo:
-                  type: string
-                  enum: [alumnos, calificaciones, docentes, catalogos]
-                periodo_id:
-                  type: integer
+                archivo: { type: string, format: binary, description: ".xlsx, máximo 5 MB y 5,000 filas" }
       responses:
-        '202':
-          description: Archivo recibido y en proceso
+        '201':
+          description: Importación registrada (completado o con_errores)
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  importacion_id: { type: integer }
-                  estado: { type: string, example: procesando }
+                allOf:
+                  - $ref: '#/components/schemas/ImportacionDetalle'
+                  - type: object
+                    properties:
+                      credenciales:
+                        description: >
+                          Solo en esta respuesta y solo para tipo docentes: usuario y
+                          contraseña temporal de cada cuenta que se creó. No se
+                          guardan en claro ni se pueden volver a consultar.
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            numero_empleado: { type: string }
+                            nombre: { type: string }
+                            rol: { type: string }
+                            usuario: { type: string, example: LARVDOC01 }
+                            password: { type: string }
+              examples:
+                completado:
+                  value: { id: 4, tipo: alumnos, nombre_archivo: alumnos.xlsx, estado: completado, filas_procesadas: 315, filas_error: 0, creada_en: "2026-11-12T10:15:10-06:00", usuario: { id: 2, nombre: Administración del Plantel }, errores: [] }
+                con_errores:
+                  value:
+                    id: 5
+                    tipo: alumnos
+                    nombre_archivo: alumnos.xlsx
+                    estado: con_errores
+                    filas_procesadas: 315
+                    filas_error: 2
+                    creada_en: "2026-11-12T10:20:02-06:00"
+                    usuario: { id: 2, nombre: Administración del Plantel }
+                    errores:
+                      - { fila: 17, columna: Matrícula, mensaje: "La matrícula 2607103500001 ya está en la fila 9." }
+                      - { fila: 203, columna: Grupo, mensaje: "El grupo \"4Z matutino\" no existe en el periodo activo. Elígelo de la lista." }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
         '422': { $ref: '#/components/responses/ErrorValidacion' }
@@ -1721,7 +1856,7 @@ paths:
   /importaciones/{importacion_id}:
     get:
       tags: [Administrador]
-      summary: Consultar el estado y resultado de una importación
+      summary: Consultar una importación con sus errores
       x-permission: importar_datos
       parameters:
         - name: importacion_id
@@ -1730,36 +1865,10 @@ paths:
           schema: { type: integer }
       responses:
         '200':
-          description: Estado de la importación
+          description: Importación y sus errores
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  estado: { type: string, enum: [procesando, completado, con_errores, fallido] }
-                  filas_procesadas: { type: integer }
-                  filas_error: { type: integer }
-                  errores:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        fila: { type: integer }
-                        columna: { type: string, nullable: true }
-                        mensaje: { type: string }
-              examples:
-                procesando:
-                  value: { estado: procesando, filas_procesadas: 120, filas_error: 0, errores: [] }
-                completado:
-                  value: { estado: completado, filas_procesadas: 450, filas_error: 0, errores: [] }
-                con_errores:
-                  value:
-                    estado: con_errores
-                    filas_procesadas: 448
-                    filas_error: 2
-                    errores:
-                      - { fila: 17, columna: matricula, mensaje: "La matrícula 2607103500001 no tiene 14 dígitos." }
-                      - { fila: 203, columna: grupo, mensaje: "El grupo 4Z no existe en el periodo 2026 B." }
+              schema: { $ref: '#/components/schemas/ImportacionDetalle' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
@@ -1964,6 +2073,7 @@ components:
         - type: object
           properties:
             es_super_admin: { type: boolean }
+            debe_cambiar_password: { type: boolean, description: "true = contraseña temporal; el cliente debe mandar a cambiarla (PUT /me/password)" }
             permisos:
               type: array
               items: { type: string }
@@ -2382,3 +2492,35 @@ components:
         porcentaje_max: { type: number, format: float }
         faltas_consecutivas: { type: integer, nullable: true, description: Días hábiles seguidos sin venir que suben al alumno a este nivel; null = desactivado }
         color_hex: { type: string, example: "#16a34a" }
+
+    Importacion:
+      type: object
+      properties:
+        id: { type: integer }
+        tipo: { type: string, enum: [alumnos, calificaciones, docentes] }
+        nombre_archivo: { type: string }
+        estado: { type: string, enum: [completado, con_errores], description: "con_errores = no se guardó nada (todo o nada)" }
+        filas_procesadas: { type: integer, description: Filas con datos que traía el archivo }
+        filas_error: { type: integer, description: Filas con al menos un error }
+        creada_en: { type: string, format: date-time }
+        usuario:
+          type: object
+          nullable: true
+          properties:
+            id: { type: integer }
+            nombre: { type: string }
+
+    ImportacionDetalle:
+      allOf:
+        - $ref: '#/components/schemas/Importacion'
+        - type: object
+          properties:
+            errores:
+              type: array
+              items:
+                type: object
+                properties:
+                  hoja: { type: string, nullable: true, description: "Solo en plantillas de varias hojas (docentes: Personal o Clases)" }
+                  fila: { type: integer, description: Número de fila en Excel (los datos empiezan en la 2) }
+                  columna: { type: string, nullable: true, description: Encabezado de la columna }
+                  mensaje: { type: string }

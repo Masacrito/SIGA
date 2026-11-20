@@ -15,9 +15,10 @@ class RolSeeder extends Seeder
             'permisos' => ['registrar_asistencia', 'consultar_asistencias', 'consultar_calificaciones'],
         ],
         'orientador' => [
-            'descripcion' => 'Seguimiento tutorial de los grupos que tiene asignados',
+            // Todos los orientadores dan clase (Orientación Vocacional): también pasan lista
+            'descripcion' => 'Seguimiento tutorial de los grupos que tiene asignados; pasa lista en sus clases',
             'permisos' => [
-                'consultar_asistencias', 'consultar_calificaciones', 'consultar_alumnos',
+                'registrar_asistencia', 'consultar_asistencias', 'consultar_calificaciones', 'consultar_alumnos',
                 'ver_semaforo_riesgo', 'registrar_observacion', 'notificar_tutor',
                 'autorizar_justificacion', 'generar_reportes',
             ],

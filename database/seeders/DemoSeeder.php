@@ -142,6 +142,9 @@ class DemoSeeder extends Seeder
         $this->usuarios['admin'] = $this->usuario('admin', 'administrador', 'Administración del Plantel');
         $this->usuarios['orientador.matutino'] = $this->usuario('orientador.matutino', 'orientador', 'Gómez Coutiño Martha Patricia');
         $this->usuarios['orientador.vespertino'] = $this->usuario('orientador.vespertino', 'orientador', 'Nájera Solís Jorge Alberto');
+        // Los orientadores también dan clase: con fila en docentes se les puede poner en un horario
+        $this->usuarios['orientador.matutino']->sincronizarRol(['numero_empleado' => 'O-0001']);
+        $this->usuarios['orientador.vespertino']->sincronizarRol(['numero_empleado' => 'O-0002']);
 
         // Un docente por materia de cada semestre; da esa materia en todos los grupos de ambos turnos
         $n = 0;

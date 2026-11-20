@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Alumno;
 use App\Models\Grupo;
-use App\Models\Inscripcion;
 use App\Models\PeriodoEscolar;
 use App\Support\Semaforo;
 use Illuminate\Http\JsonResponse;
@@ -74,7 +73,7 @@ class AlumnoController extends Controller
 
         $alumno = DB::transaction(function () use ($datos) {
             $alumno = Alumno::create($datos + ['activo' => true]);
-            $this->inscribir($alumno, $datos);
+            $alumno->inscribir($datos);
 
             return $alumno;
         });
@@ -93,7 +92,7 @@ class AlumnoController extends Controller
 
         DB::transaction(function () use ($alumno, $datos) {
             $alumno->update($datos);
-            $this->inscribir($alumno, $datos);
+            $alumno->inscribir($datos);
         });
 
         return response()->json($this->forma($alumno));
@@ -116,25 +115,6 @@ class AlumnoController extends Controller
         }
 
         return $datos;
-    }
-
-    /** Una inscripción por alumno y periodo (llave única): se crea o se actualiza. */
-    private function inscribir(Alumno $alumno, array $datos): void
-    {
-        $periodoId = PeriodoEscolar::activo()?->id;
-        $cambios = array_intersect_key($datos, ['grupo_id' => true, 'situacion_academica' => true]);
-        $inscripcion = Inscripcion::firstWhere(['alumno_id' => $alumno->id, 'periodo_id' => $periodoId]);
-
-        if ($inscripcion) {
-            $inscripcion->update($cambios);
-        } elseif (isset($cambios['grupo_id'])) {
-            Inscripcion::create($cambios + [
-                'alumno_id' => $alumno->id,
-                'periodo_id' => $periodoId,
-                'situacion_academica' => 'regular',
-                'fecha_inscripcion' => today(),
-            ]);
-        }
     }
 
     /** Forma AlumnoAdmin: Alumno + su grupo del periodo activo. */

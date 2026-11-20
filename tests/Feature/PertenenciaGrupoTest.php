@@ -45,9 +45,12 @@ class PertenenciaGrupoTest extends TestCase
         $this->getJson('/api/mis-horarios')->assertOk()->assertExactJson([]);
     }
 
-    public function test_orientador_sin_permiso_y_grupo_inexistente(): void
+    /** Los orientadores también dan clase (Orientación Vocacional): pasan lista, pero solo en lo suyo. */
+    public function test_orientador_pasa_lista_solo_en_sus_grupos_y_grupo_inexistente(): void
     {
-        $this->como('orientador1')->getJson('/api/grupos/'.$this->grupo('1', 'A')->id.'/alumnos')->assertForbidden();
+        $this->como('orientador1')->getJson('/api/grupos/'.$this->grupo('1', 'A')->id.'/alumnos')->assertOk();
+        $this->getJson('/api/grupos/'.$this->grupo('3', 'A')->id.'/alumnos')->assertForbidden();
+        $this->getJson('/api/mis-horarios')->assertOk()->assertExactJson([]);
         $this->como('docente1')->getJson('/api/grupos/999999/alumnos')->assertNotFound();
     }
 
