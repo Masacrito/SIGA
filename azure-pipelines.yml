@@ -1,0 +1,84 @@
+# SIGA — API Laravel + deploy/ (repo GitHub: Masacrito/SIGA, rama master)
+# Push a master: pruebas -> despliegue en la VM.  Pull request a master: solo pruebas.
+# Este pipeline también copia deploy/ (compose.yaml, Caddyfile, deploy.sh) al servidor.
+
+trigger:
+  branches:
+    include: [master]
+
+pr:
+  branches:
+    include: [master]
+
+pool: SIGA-VM            # agente self-hosted instalado en la VM
+
+variables:
+  - group: siga-prod     # DOMINIO, DEMO, SIGA_DIR
+
+stages:
+  - stage: CI
+    displayName: Pruebas
+    jobs:
+      - job: phpunit
+        displayName: PHPUnit
+        steps:
+          - checkout: self
+            clean: true
+
+          - script: |
+              set -euo pipefail
+              docker build --build-arg COMPOSER_DEV=1 -t siga-app:ci .
+              KEY="base64:`openssl rand -base64 32`"
+              docker run --rm \
+                -e APP_KEY="$KEY" \
+                -v "$PWD/tests:/var/www/html/tests:ro" \
+                -v "$PWD/phpunit.xml:/var/www/html/phpunit.xml:ro" \
+                siga-app:ci php artisan test
+            displayName: PHPUnit (SQLite en memoria)
+
+  - stage: Deploy
+    displayName: Producción
+    dependsOn: CI
+    # Solo despliega con push a master, nunca en pull requests
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - deployment: api
+        displayName: API
+        environment: siga-produccion
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  clean: true
+
+                - script: |
+                    set -euo pipefail
+                    mkdir -p "$(SIGA_DIR)/asistencias_back" "$(SIGA_DIR)/deploy"
+                    rsync -a --delete \
+                      --exclude .git --exclude .env --exclude vendor --exclude node_modules \
+                      --exclude deploy \
+                      ./ "$(SIGA_DIR)/asistencias_back/"
+                    # deploy/ sin --delete: el .env del servidor nunca se toca
+                    rsync -a --exclude .env deploy/ "$(SIGA_DIR)/deploy/"
+                  displayName: Sincronizar código y deploy/
+
+                - script: |
+                    set -euo pipefail
+                    cd "$(SIGA_DIR)"
+                    if [ ! -d asistencias_front ]; then
+                      echo "##vso[task.logissue type=warning]Falta el front; corre el pipeline de SIGA_WEB"
+                      exit 0
+                    fi
+                    sed -i 's/\r$//' deploy/deploy.sh
+                    DOMINIO="$(DOMINIO)" DEMO="$(DEMO)" bash deploy/deploy.sh
+                  displayName: deploy.sh (build + migraciones)
+
+                - script: |
+                    if [ -d "$(SIGA_DIR)/asistencias_front" ]; then
+                      curl -fsS --retry 10 --retry-delay 6 "https://$(DOMINIO)/up"
+                    fi
+                  displayName: Health check /up
+
+                - script: docker image prune -f
+                  displayName: Limpiar imágenes viejas

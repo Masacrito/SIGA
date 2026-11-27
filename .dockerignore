@@ -23,3 +23,5 @@ phpunit.xml
 compose*.yaml
 docker-compose*.yml
 *.log
+deploy
+azure-pipelines.yml
