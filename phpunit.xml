@@ -19,6 +19,8 @@
     </source>
     <php>
         <env name="APP_ENV" value="testing"/>
+        <!-- Misma zona que producción: las pruebas de horas no dependen del .env de cada máquina -->
+        <env name="APP_TIMEZONE" value="America/Mexico_City"/>
         <!-- El PruebasSeeder crea su propio "admin": el súper admin del .env no debe chocar -->
         <env name="ADMIN_USERNAME" value="superadmin" force="true"/>
         <env name="ADMIN_PASSWORD" value="password" force="true"/>

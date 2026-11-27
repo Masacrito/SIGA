@@ -33,7 +33,7 @@ stages:
                 -e APP_KEY="$KEY" \
                 -v "$PWD/tests:/var/www/html/tests:ro" \
                 -v "$PWD/phpunit.xml:/var/www/html/phpunit.xml:ro" \
-                siga-app:ci php artisan test
+                siga-app:ci sh -c "touch .env && php artisan test"
             displayName: PHPUnit (SQLite en memoria)
 
   - stage: Deploy
